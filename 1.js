@@ -6143,7 +6143,7 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
         controlsContainer.appendChild(addColorBtn);
 
         const defaultColorsBtn = createTrackerButton('Default thread title colours');
-        defaultColorsBtn.style.width = '100%';
+        defaultColorsBtn.style.cssText += "padding: 4px 8px; font-size: 11px; height: 25px; box-sizing: border-box; flex-grow: 1;";
         defaultColorsBtn.addEventListener('click', () => {
             if (confirm("Are you sure you want to revert to the default thread title colours?")) {
                 localStorage.removeItem(THREAD_TITLE_COLORS_KEY);
@@ -6270,6 +6270,8 @@ function handleIntersection(entries, observerInstance) {
 // --- Theme Settings Persistence ---
 const THEME_SETTINGS_KEY = 'otkThemeSettings';
 let pendingThemeChanges = {};
+let prePreviewSettings = null;
+let currentlyPreviewingThemeName = null;
 
 function showApplyDiscardButtons() {
     const applyBtn = document.getElementById('otk-apply-settings-btn');
@@ -7618,7 +7620,7 @@ function applyThemeSettings(options = {}) {
         resetGeneralSettingsRow.style.gridTemplateColumns = '1fr';
         resetGeneralSettingsRow.style.marginTop = '10px';
         const resetGeneralSettingsButton = createTrackerButton("Reset All General Settings to Default");
-        resetGeneralSettingsButton.style.width = '100%';
+        resetGeneralSettingsButton.style.cssText += "padding: 4px 8px; font-size: 11px; height: 25px; box-sizing: border-box; flex-grow: 1;";
         resetGeneralSettingsButton.addEventListener('click', () => {
             if (confirm("Are you sure you want to reset all general settings to default?")) {
                 const generalSettingsKeys = [
@@ -8558,7 +8560,7 @@ function applyThemeSettings(options = {}) {
         // It should be outside the normal flow of generated options, or the last item.
         // For now, let's re-add it manually after all generated content.
         const buttonWrapper = document.createElement('div');
-        buttonWrapper.style.cssText = "display: flex; margin-top: 20px; width: 100%; gap: 8px;";
+        buttonWrapper.style.cssText = "display: flex; margin-top: 20px; width: 100%; gap: 8px; padding: 0 10px 0 30px; box-sizing: border-box;";
 
         const resetAllColorsButton = createTrackerButton("Reset All Colors to Default");
         resetAllColorsButton.id = 'otk-reset-all-colors-btn'; // Keep ID if applyThemeSettings uses it
@@ -9827,7 +9829,7 @@ function setupFilterWindow() {
         return new Promise((resolve) => {
             GM_xmlhttpRequest({
                 method: "GET",
-                url: 'https://github.com/johnt1884/ff/releases/download/firefox/cities_geonames.json',
+                url: 'https://raw.githubusercontent.com/lutangar/cities.json/master/cities.json',
                 onload: function(response) {
                     if (response.status === 200) {
                         try {
