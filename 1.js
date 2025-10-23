@@ -118,9 +118,7 @@ document.addEventListener("visibilitychange", () => {
     const DEBUG_MODE_KEY = 'otkDebugModeEnabled'; // For localStorage
     const LOCAL_IMAGE_COUNT_KEY = 'otkLocalImageCount';
     const LOCAL_VIDEO_COUNT_KEY = 'otkLocalVideoCount';
-    const LAST_SEEN_MESSAGES_KEY = 'otkLastSeenMessagesCount';
-    const LAST_SEEN_IMAGES_KEY = 'otkLastSeenImagesCount';
-    const LAST_SEEN_VIDEOS_KEY = 'otkLastSeenVideosCount';
+    const UNREAD_MESSAGE_IDS_KEY = 'otkUnreadMessageIds';
     const VIEWER_OPEN_KEY = 'otkViewerOpen'; // For viewer open/closed state
     const PINNED_MESSAGE_ID_KEY = 'otkPinnedMessageId'; // For storing pinned message ID
     const PINNED_MESSAGE_CLASS = 'otk-pinned-message'; // CSS class for highlighting pinned message
@@ -192,6 +190,7 @@ document.addEventListener("visibilitychange", () => {
     let cachedNewMessages = [];
     let multiQuoteSelections = new Set();
 let userPostIds = new Set();
+let unreadIds = new Set(JSON.parse(localStorage.getItem(UNREAD_MESSAGE_IDS_KEY) || '[]'));
 
     // IndexedDB instance
     let otkMediaDB = null;
@@ -2137,14 +2136,23 @@ function renderThreadList() {
         scroller.style.top = '-4px';
         clippingContainer.appendChild(scroller);
 
-        const itemsToRender = (animationSpeed > 0)
-            ? [...threadDisplayObjects, ...threadDisplayObjects.slice(0, 3)]
-            : [...threadDisplayObjects];
-        itemsToRender.forEach(thread => scroller.appendChild(createThreadListItemElement(thread, false)));
-
         let isResetting = false;
-        threadTitleAnimationIndex = 0;
         const intervalDuration = animationSpeed > 0 ? 4000 / animationSpeed : 0;
+
+        if (animationSpeed > 0) {
+            const clonesEnd = threadDisplayObjects.slice(0, 3).map(thread => createThreadListItemElement(thread, false));
+            const clonesStart = threadDisplayObjects.slice(-3).map(thread => createThreadListItemElement(thread, false));
+
+            clonesStart.forEach(clone => scroller.appendChild(clone));
+            threadDisplayObjects.forEach(thread => scroller.appendChild(createThreadListItemElement(thread, false)));
+            clonesEnd.forEach(clone => scroller.appendChild(clone));
+
+            threadTitleAnimationIndex = 3;
+            scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
+        } else {
+            threadDisplayObjects.forEach(thread => scroller.appendChild(createThreadListItemElement(thread, false)));
+            threadTitleAnimationIndex = 0;
+        }
 
         const arrowContainer = document.createElement('div');
         arrowContainer.style.cssText = `
@@ -2166,9 +2174,6 @@ function renderThreadList() {
         downArrow.style.cssText = 'cursor: pointer;';
         arrowContainer.appendChild(downArrow);
 
-        const themeSettingsForAnim = JSON.parse(localStorage.getItem(THEME_SETTINGS_KEY)) || {};
-        const animationDirection = themeSettingsForAnim.otkThreadTitleAnimationDirection || 'Up';
-
         const stopAnimation = () => {
             if (threadTitleAnimationInterval) {
                 clearInterval(threadTitleAnimationInterval);
@@ -2180,75 +2185,66 @@ function renderThreadList() {
             if (animationSpeed <= 0 || threadTitleAnimationInterval) return;
             threadTitleAnimationInterval = setInterval(() => {
                 if (document.hidden || isResetting) return;
+                const themeSettingsForAnim = JSON.parse(localStorage.getItem(THEME_SETTINGS_KEY)) || {};
+                const animationDirection = themeSettingsForAnim.otkThreadTitleAnimationDirection || 'Up';
 
                 if (animationDirection === 'Up') {
                     threadTitleAnimationIndex++;
-                    if (threadTitleAnimationIndex >= threadDisplayObjects.length) {
-                        isResetting = true;
-                        setTimeout(() => {
-                            scroller.style.transition = 'none';
-                            threadTitleAnimationIndex = 0;
-                            scroller.style.transform = 'translateY(0)';
-                            void scroller.offsetWidth;
-                            scroller.style.transition = 'transform 0.5s ease-in-out';
-                            isResetting = false;
-                        }, 500);
-                    }
                 } else { // Down
                     threadTitleAnimationIndex--;
-                    if (threadTitleAnimationIndex < 0) {
-                        isResetting = true;
-                        scroller.style.transition = 'none';
-                        threadTitleAnimationIndex = threadDisplayObjects.length -1;
-                        scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
-                        void scroller.offsetWidth;
-                        scroller.style.transition = 'transform 0.5s ease-in-out';
-                        isResetting = false;
-                    }
                 }
                 scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
 
-            }, intervalDuration);
-        };
-
-        const moveManually = (direction) => {
-            if (animationSpeed > 0 && isResetting) return;
-            stopAnimation();
-            threadTitleAnimationIndex += direction;
-            const totalItems = threadDisplayObjects.length;
-            const looping = animationSpeed > 0;
-
-            if (looping) {
-                if (threadTitleAnimationIndex >= totalItems) {
-                    scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
+                if (animationDirection === 'Up' && threadTitleAnimationIndex >= threadDisplayObjects.length + 3) {
                     isResetting = true;
                     setTimeout(() => {
                         scroller.style.transition = 'none';
-                        threadTitleAnimationIndex = 0;
-                        scroller.style.transform = 'translateY(0)';
+                        threadTitleAnimationIndex = 3;
+                        scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
                         void scroller.offsetWidth;
                         scroller.style.transition = 'transform 0.5s ease-in-out';
                         isResetting = false;
                     }, 500);
-                } else if (threadTitleAnimationIndex < 0) {
+                } else if (animationDirection === 'Down' && threadTitleAnimationIndex < 3) {
                     isResetting = true;
+                    setTimeout(() => {
+                        scroller.style.transition = 'none';
+                        threadTitleAnimationIndex += threadDisplayObjects.length;
+                        scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
+                        void scroller.offsetWidth;
+                        scroller.style.transition = 'transform 0.5s ease-in-out';
+                        isResetting = false;
+                    }, 500);
+                }
+            }, intervalDuration);
+        };
+
+        const moveManually = (direction) => {
+            if (animationSpeed <= 0 || isResetting) return;
+            stopAnimation();
+            threadTitleAnimationIndex += direction;
+            scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
+
+            if (direction > 0 && threadTitleAnimationIndex >= threadDisplayObjects.length + 3) {
+                isResetting = true;
+                setTimeout(() => {
                     scroller.style.transition = 'none';
-                    threadTitleAnimationIndex = totalItems;
+                    threadTitleAnimationIndex = 3;
                     scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
                     void scroller.offsetWidth;
-                    setTimeout(() => {
-                        scroller.style.transition = 'transform 0.5s ease-in-out';
-                        threadTitleAnimationIndex = totalItems - 1;
-                        scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
-                        isResetting = false;
-                    }, 20);
-                } else {
+                    scroller.style.transition = 'transform 0.5s ease-in-out';
+                    isResetting = false;
+                }, 500);
+            } else if (direction < 0 && threadTitleAnimationIndex < 3) {
+                isResetting = true;
+                setTimeout(() => {
+                    scroller.style.transition = 'none';
+                    threadTitleAnimationIndex += threadDisplayObjects.length;
                     scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
-                }
-            } else {
-                const maxIndex = totalItems > 3 ? totalItems - 3 : 0;
-                threadTitleAnimationIndex = Math.max(0, Math.min(threadTitleAnimationIndex, maxIndex));
-                scroller.style.transform = `translateY(-${threadTitleAnimationIndex * itemHeight}px)`;
+                    void scroller.offsetWidth;
+                    scroller.style.transition = 'transform 0.5s ease-in-out';
+                    isResetting = false;
+                }, 500);
             }
         };
 
@@ -2481,6 +2477,12 @@ function renderThreadList() {
         const messagesContainer = document.createElement('div');
         messagesContainer.id = 'otk-messages-container';
 
+        let scrollTimeout;
+        messagesContainer.addEventListener('scroll', () => {
+            clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(handleScrollRead, 200);
+        });
+
         messagesContainer.style.cssText = `
             position: absolute;
             top: 0;
@@ -2630,28 +2632,11 @@ updateDisplayedStatistics(false); // Update stats after all media processing is 
         const messageElementsBefore = messagesContainer.querySelectorAll('.otk-message-container-main');
         consoleLog(`[AppendLimit] Before append: DOM has ${messageElementsBefore.length} messages. renderedMessageIdsInViewer has ${renderedMessageIdsInViewer.size} IDs.`);
 
-        let anchorInfo = { id: null, offset: 0 };
-        const containerRect = messagesContainer.getBoundingClientRect();
-        const messageElements = messagesContainer.querySelectorAll('.otk-message-container-main, .otk-message-container-quote-depth-1');
-        let anchorElement = null;
+        // Check if user is scrolled to the bottom before making changes.
+        // A small tolerance (e.g., 5px) can be useful.
+        const isScrolledToBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 5;
+        consoleLog(`[ScrollRestore] User is at bottom: ${isScrolledToBottom}`);
 
-        for (const el of messageElements) {
-            const elRect = el.getBoundingClientRect();
-            if (elRect.bottom > containerRect.top && elRect.top < containerRect.bottom) {
-                anchorElement = el;
-                break;
-            }
-        }
-
-        if (anchorElement) {
-            anchorInfo.id = anchorElement.id;
-            anchorInfo.offset = anchorElement.getBoundingClientRect().top - containerRect.top;
-            consoleLog(`[ScrollAnchor] Found anchor: ${anchorInfo.id}, offset: ${anchorInfo.offset}`);
-        } else {
-            consoleLog('[ScrollAnchor] No visible anchor element found. Will fallback to basic scroll restore.');
-        }
-
-        const oldScrollTop = messagesContainer.scrollTop; // Keep as fallback
 
         const newContentDiv = document.createElement('div');
 
@@ -2727,19 +2712,12 @@ updateDisplayedStatistics(false); // Update stats after all media processing is 
         Promise.all(mediaLoadPromises).then(async () => {
             hideLoadingScreen();
 
-            if (anchorInfo.id) {
-                const elementToScrollTo = document.getElementById(anchorInfo.id);
-                if (elementToScrollTo) {
-                    const newScrollTop = elementToScrollTo.offsetTop - anchorInfo.offset;
-                    messagesContainer.scrollTop = newScrollTop;
-                    consoleLog(`[ScrollAnchor] Restored scroll to anchor ${anchorInfo.id}. New scrollTop: ${newScrollTop}`);
-                } else {
-                    messagesContainer.scrollTop = oldScrollTop;
-                    consoleLog(`[ScrollAnchor] Anchor element ${anchorInfo.id} not found. Fell back to old scrollTop.`);
-                }
+            if (isScrolledToBottom) {
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                consoleLog(`[ScrollRestore] Auto-scrolling to new bottom.`);
             } else {
-                messagesContainer.scrollTop = oldScrollTop;
-                consoleLog(`[ScrollAnchor] No anchor found. Fell back to old scrollTop.`);
+                consoleLog(`[ScrollRestore] User was not at bottom. Maintaining scroll position.`);
+                // No action needed - browser will maintain scroll position relative to content.
             }
 
             viewerActiveImageCount = uniqueImageViewerHashes.size;
@@ -2749,6 +2727,66 @@ updateDisplayedStatistics(false); // Update stats after all media processing is 
             consoleError("[appendNewMessagesToViewer] Error in media promises:", err);
             hideLoadingScreen();
         });
+    }
+
+    function handleScrollRead() {
+        const messagesContainer = document.getElementById('otk-messages-container');
+        if (!messagesContainer || unreadIds.size === 0) {
+            return;
+        }
+
+        const unreadElements = Array.from(messagesContainer.querySelectorAll('.is-unread'));
+        if (unreadElements.length === 0) {
+            return;
+        }
+
+        const containerRect = messagesContainer.getBoundingClientRect();
+        let newestVisibleUnreadMessage = null;
+
+        // Find the newest (latest in DOM, latest timestamp) unread message that is at least partially visible
+        for (let i = unreadElements.length - 1; i >= 0; i--) {
+            const el = unreadElements[i];
+            const elRect = el.getBoundingClientRect();
+            // Check if the element is intersecting with the container's viewport
+            if (elRect.top < containerRect.bottom && elRect.bottom > containerRect.top) {
+                const messageId = parseInt(el.dataset.messageId, 10);
+                const message = findMessageById(messageId);
+                if (message) {
+                    newestVisibleUnreadMessage = message;
+                    break; // Found the newest visible one
+                }
+            }
+        }
+
+        if (newestVisibleUnreadMessage) {
+            const cutoffTime = newestVisibleUnreadMessage.time;
+            const allMessages = getAllMessagesSorted(); // This is sorted by time ascending
+            const idsToKeep = new Set();
+            const idsToRemove = new Set();
+
+            for (const unreadId of unreadIds) {
+                const message = allMessages.find(m => m.id === unreadId);
+                if (message && message.time > cutoffTime) {
+                    idsToKeep.add(unreadId);
+                } else {
+                    idsToRemove.add(unreadId);
+                }
+            }
+
+            if (idsToRemove.size > 0) {
+                consoleLog(`[ScrollRead] Marking ${idsToRemove.size} messages as read.`);
+                unreadIds = idsToKeep;
+
+                // Update UI
+                idsToRemove.forEach(id => {
+                    const elements = document.querySelectorAll(`.otk-message-container-main[data-message-id='${id}']`);
+                    elements.forEach(el => el.classList.remove('is-unread'));
+                });
+
+                localStorage.setItem(UNREAD_MESSAGE_IDS_KEY, JSON.stringify(Array.from(unreadIds)));
+                updateDisplayedStatistics(); // This will update the (+n) stat
+            }
+        }
     }
 
 
@@ -3971,6 +4009,10 @@ function createMessageElementDOM(message, mediaLoadPromises, uniqueImageViewerHa
                 }
             }
 
+            if (unreadIds.has(message.id)) {
+                messageDiv.classList.add('is-unread');
+            }
+
             if (isFiltered) {
                 const hasQuotes = textElement.querySelector('div[data-message-id]') !== null;
                 const hasUnfilteredContent = ((processedMessage.text || '').trim().length > 0) || (processedMessage.attachment !== null);
@@ -4615,26 +4657,12 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
             window.dispatchEvent(new CustomEvent('otkMessagesUpdated'));
             renderThreadList();
 
-            // Calculate new messages and media from this refresh
-            let newMessagesThisRefresh = newMessages.length;
-            let newImagesThisRefresh = 0;
-            let newVideosThisRefresh = 0;
-            newMessages.forEach(msg => {
-                if (msg.attachment) {
-                    const ext = msg.attachment.ext.toLowerCase();
-                    if (['.jpg', '.jpeg', '.png', '.gif'].includes(ext)) newImagesThisRefresh++;
-                    else if (['.webm', '.mp4'].includes(ext)) newVideosThisRefresh++;
-                }
-            });
-
-            // Accumulate new counts
-            let accumulatedNewMessages = parseInt(localStorage.getItem('otkNewMessagesCount') || '0') + newMessagesThisRefresh;
-            let accumulatedNewImages = parseInt(localStorage.getItem('otkNewImagesCount') || '0') + newImagesThisRefresh;
-            let accumulatedNewVideos = parseInt(localStorage.getItem('otkNewVideosCount') || '0') + newVideosThisRefresh;
-
-            localStorage.setItem('otkNewMessagesCount', accumulatedNewMessages);
-            localStorage.setItem('otkNewImagesCount', accumulatedNewImages);
-            localStorage.setItem('otkNewVideosCount', accumulatedNewVideos);
+            const newIds = newMessages.map(m => m.id);
+            if (newIds.length > 0) {
+                newIds.forEach(id => unreadIds.add(id));
+                localStorage.setItem(UNREAD_MESSAGE_IDS_KEY, JSON.stringify(Array.from(unreadIds)));
+                consoleLog(`[BG] Added ${newIds.length} new message IDs to unread list. Total unread: ${unreadIds.size}`);
+            }
 
             // **FIX: Declare viewerIsOpen before it is used.**
             const viewerIsOpen = otkViewer && otkViewer.style.display === 'block';
@@ -4874,28 +4902,9 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
             renderThreadList();
             window.dispatchEvent(new CustomEvent('otkMessagesUpdated'));
 
-            // After a manual refresh, the "last seen" counts should become the new ground truth totals.
-            let newTotalMessages = 0;
-            let newTotalImages = 0;
-            let newTotalVideos = 0;
-            for (const threadId in messagesByThreadId) {
-                const messages = messagesByThreadId[threadId] || [];
-                newTotalMessages += messages.length;
-                messages.forEach(msg => {
-                    if (msg.attachment) {
-                        const ext = msg.attachment.ext.toLowerCase();
-                        if (['.jpg', '.jpeg', '.png', '.gif'].includes(ext)) newTotalImages++;
-                        else if (['.webm', '.mp4'].includes(ext)) newTotalVideos++;
-                    }
-                });
-            }
-            localStorage.setItem(LAST_SEEN_MESSAGES_KEY, newTotalMessages);
-            localStorage.setItem(LAST_SEEN_IMAGES_KEY, newTotalImages);
-            localStorage.setItem(LAST_SEEN_VIDEOS_KEY, newTotalVideos);
-            localStorage.setItem('otkNewMessagesCount', '0');
-            localStorage.setItem('otkNewImagesCount', '0');
-            localStorage.setItem('otkNewVideosCount', '0');
-            consoleLog(`[Manual Refresh] Updated last seen counts and reset accumulated new counts.`);
+            unreadIds.clear();
+            localStorage.setItem(UNREAD_MESSAGE_IDS_KEY, JSON.stringify([]));
+            consoleLog(`[Manual Refresh] Cleared unread message list.`);
 
         let viewerIsOpen = otkViewer && otkViewer.style.display === 'block';
 
@@ -5033,9 +5042,7 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
             localStorage.removeItem(SEEN_EMBED_URL_IDS_KEY);
             localStorage.setItem(LOCAL_IMAGE_COUNT_KEY, '0');
             localStorage.setItem(LOCAL_VIDEO_COUNT_KEY, '0');
-            localStorage.removeItem(LAST_SEEN_MESSAGES_KEY);
-            localStorage.removeItem(LAST_SEEN_IMAGES_KEY);
-            localStorage.removeItem(LAST_SEEN_VIDEOS_KEY);
+            localStorage.removeItem(UNREAD_MESSAGE_IDS_KEY);
             localStorage.removeItem(BLOCKED_THREADS_KEY);
             consoleLog('[Clear] LocalStorage (threads, messages, seen embeds, media counts, ACTIVE theme) cleared/reset. CUSTOM THEMES PRESERVED.');
 
@@ -5227,8 +5234,6 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
         };
 
         const oldNewMessages = getOldStatValue('messages');
-        const oldNewImages = getOldStatValue('images');
-        const oldNewVideos = getOldStatValue('videos');
 
         let totalMessagesInStorage = 0;
         let totalImagesInStorage = 0;
@@ -5249,9 +5254,9 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
             });
         }
 
-        const newMessages = parseInt(localStorage.getItem('otkNewMessagesCount') || '0');
-        const newImages = parseInt(localStorage.getItem('otkNewImagesCount') || '0');
-        const newVideos = parseInt(localStorage.getItem('otkNewVideosCount') || '0');
+        const newMessages = unreadIds.size;
+        const newImages = 0;
+        const newVideos = 0;
 
         const viewerIsOpen = otkViewer && otkViewer.style.display === 'block';
 
@@ -5316,8 +5321,8 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
         const paddingLength = 4;
         updateStatLine(threadsTrackedElem, `- ${padNumber(liveThreadsCount, paddingLength)} Live Thread${liveThreadsCount === 1 ? '' : 's'}`, 0, 0, 'threads');
         updateStatLine(totalMessagesElem, `- ${padNumber(mainMessagesCount, paddingLength)} Total Message${mainMessagesCount === 1 ? '' : 's'}`, newMessages, oldNewMessages, 'messages');
-        updateStatLine(localImagesElem, `- ${padNumber(mainImagesCount, paddingLength)} Image${mainImagesCount === 1 ? '' : 's'}`, newImages, oldNewImages, 'images');
-        updateStatLine(localVideosElem, `- ${padNumber(mainVideosCount, paddingLength)} Video${mainVideosCount === 1 ? '' : 's'}`, newVideos, oldNewVideos, 'videos');
+        updateStatLine(localImagesElem, `- ${padNumber(mainImagesCount, paddingLength)} Image${mainImagesCount === 1 ? '' : 's'}`, 0, 0, 'images');
+        updateStatLine(localVideosElem, `- ${padNumber(mainVideosCount, paddingLength)} Video${mainVideosCount === 1 ? '' : 's'}`, 0, 0, 'videos');
     }
 
     function setupTitleObserver() {
@@ -6124,35 +6129,35 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
             colorListContainer.appendChild(colorRow);
         });
 
-        const controlsContainer = document.createElement('div');
-        controlsContainer.style.cssText = `
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            margin-top: 15px;
-            padding: 0 10px 0 30px; /* Align with option rows */
-        `;
+        const addColorRow = document.createElement('div');
+        addColorRow.classList.add('otk-option-row');
+        addColorRow.style.gridTemplateColumns = '1fr';
+        addColorRow.style.marginTop = '15px';
 
         const addColorBtn = createTrackerButton('Add Colour');
-        addColorBtn.style.width = '100%';
+        addColorBtn.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
         addColorBtn.addEventListener('click', () => {
             titleColors.push('#ffffff'); // Add white as a default new color
             localStorage.setItem(THREAD_TITLE_COLORS_KEY, JSON.stringify(titleColors));
             renderThreadTitleColorsOptions();
         });
-        controlsContainer.appendChild(addColorBtn);
+        addColorRow.appendChild(addColorBtn);
+        contentArea.appendChild(addColorRow);
+
+        const defaultColorsRow = document.createElement('div');
+        defaultColorsRow.classList.add('otk-option-row');
+        defaultColorsRow.style.gridTemplateColumns = '1fr';
 
         const defaultColorsBtn = createTrackerButton('Default thread title colours');
-        defaultColorsBtn.style.cssText += "padding: 4px 8px; font-size: 11px; height: 25px; box-sizing: border-box; flex-grow: 1;";
+        defaultColorsBtn.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
         defaultColorsBtn.addEventListener('click', () => {
             if (confirm("Are you sure you want to revert to the default thread title colours?")) {
                 localStorage.removeItem(THREAD_TITLE_COLORS_KEY);
                 renderThreadTitleColorsOptions();
             }
         });
-        controlsContainer.appendChild(defaultColorsBtn);
-
-        contentArea.appendChild(controlsContainer);
+        defaultColorsRow.appendChild(defaultColorsBtn);
+        contentArea.appendChild(defaultColorsRow);
     }
 
 function startAutoEmbedReloader() {
@@ -6270,8 +6275,6 @@ function handleIntersection(entries, observerInstance) {
 // --- Theme Settings Persistence ---
 const THEME_SETTINGS_KEY = 'otkThemeSettings';
 let pendingThemeChanges = {};
-let prePreviewSettings = null;
-let currentlyPreviewingThemeName = null;
 
 function showApplyDiscardButtons() {
     const applyBtn = document.getElementById('otk-apply-settings-btn');
@@ -6945,6 +6948,8 @@ function applyThemeSettings(options = {}) {
     }
 
     function setupOptionsWindow() {
+        let prePreviewSettings = null;
+        let currentlyPreviewingThemeName = null;
         consoleLog("Setting up Options Window...");
 
         // Check if window already exists
@@ -6975,7 +6980,7 @@ function applyThemeSettings(options = {}) {
         const titleBar = document.createElement('div');
         titleBar.id = 'otk-options-title-bar';
         titleBar.style.cssText = `
-            padding: 8px 15px 8px 30px;
+            padding: 8px 30px 8px 30px;
             background-color: var(--otk-gui-bg-color);
             color: #f0f0f0;
             font-weight: bold;
@@ -7620,7 +7625,7 @@ function applyThemeSettings(options = {}) {
         resetGeneralSettingsRow.style.gridTemplateColumns = '1fr';
         resetGeneralSettingsRow.style.marginTop = '10px';
         const resetGeneralSettingsButton = createTrackerButton("Reset All General Settings to Default");
-        resetGeneralSettingsButton.style.cssText += "padding: 4px 8px; font-size: 11px; height: 25px; box-sizing: border-box; flex-grow: 1;";
+        resetGeneralSettingsButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
         resetGeneralSettingsButton.addEventListener('click', () => {
             if (confirm("Are you sure you want to reset all general settings to default?")) {
                 const generalSettingsKeys = [
@@ -8556,18 +8561,16 @@ function applyThemeSettings(options = {}) {
         loadingScreenSection.appendChild(createThemeOptionRow({ labelText: "Progress Bar Fill Colour:", storageKey: 'loadingProgressBarFillColor', cssVariable: '--otk-loading-progress-bar-fill-color', defaultValue: '#4CAF50', inputType: 'color', idSuffix: 'loading-progress-fill' }));
         loadingScreenSection.appendChild(createThemeOptionRow({ labelText: "Progress Bar Font Colour:", storageKey: 'loadingProgressBarTextColor', cssVariable: '--otk-loading-progress-bar-text-color', defaultValue: '#ffffff', inputType: 'color', idSuffix: 'loading-progress-text' }));
 
-        // --- Reset All Button ---
-        // It should be outside the normal flow of generated options, or the last item.
-        // For now, let's re-add it manually after all generated content.
-        const buttonWrapper = document.createElement('div');
-        buttonWrapper.style.cssText = "display: flex; margin-top: 20px; width: 100%; gap: 8px; padding: 0 10px 0 30px; box-sizing: border-box;";
+        const resetAllColorsRow = document.createElement('div');
+        resetAllColorsRow.classList.add('otk-option-row');
+        resetAllColorsRow.style.gridTemplateColumns = '1fr';
+        resetAllColorsRow.style.marginTop = '20px';
 
         const resetAllColorsButton = createTrackerButton("Reset All Colors to Default");
-        resetAllColorsButton.id = 'otk-reset-all-colors-btn'; // Keep ID if applyThemeSettings uses it
-        resetAllColorsButton.style.cssText += "padding: 4px 8px; font-size: 11px; height: 25px; box-sizing: border-box; flex-grow: 1; width: 100%;";
-        buttonWrapper.appendChild(resetAllColorsButton);
-
-        themeOptionsContainer.appendChild(buttonWrapper);
+        resetAllColorsButton.id = 'otk-reset-all-colors-btn';
+        resetAllColorsButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
+        resetAllColorsRow.appendChild(resetAllColorsButton);
+        themeOptionsContainer.appendChild(resetAllColorsRow);
 
         // Helper function to get all theme configurations (used by save and reset)
         function getAllOptionConfigs() {
@@ -9663,7 +9666,7 @@ function setupFilterWindow() {
                 grid-template-columns: 240px 1fr;
                 gap: 8px;
                 align-items: center;
-                padding: 4px 10px 4px 30px;
+                padding: 4px 30px 4px 30px;
                 margin: 0;
                 width: 100%;
                 box-sizing: border-box;
@@ -9825,101 +9828,91 @@ function setupFilterWindow() {
         }
 
 
-    async function fetchTimezones() {
-        return new Promise((resolve) => {
-            GM_xmlhttpRequest({
-                method: "GET",
-                url: 'https://raw.githubusercontent.com/lutangar/cities.json/master/cities.json',
-                onload: function(response) {
-                    if (response.status === 200) {
-                        try {
-                            cityData = JSON.parse(response.responseText);
-                            consoleLog(`Successfully fetched and parsed ${cityData.length} cities.`);
-                        } catch (e) {
-                            consoleError("Failed to parse city data JSON:", e);
-                            cityData = []; // Ensure it's an empty array on error
-                        }
-                    } else {
-                        consoleError(`Failed to fetch city data: ${response.status}`);
+async function fetchTimezones() {
+    return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: 'https://github.com/johnt1884/ff/releases/download/firefox/cities_geonames.json',
+            onload: function(response) {
+                if (response.status === 200) {
+                    try {
+                        cityData = JSON.parse(response.responseText);
+                        consoleLog(`Successfully fetched and parsed ${cityData.length} cities.`);
+                        resolve();
+                    } catch (e) {
+                        consoleError('Error parsing city data:', e);
                         cityData = [];
+                        reject(e);
                     }
-                    resolve();
-                },
-                onerror: function(error) {
-                    consoleError('Error fetching city data:', error);
+                } else {
+                    const errorMsg = `Failed to fetch city data: ${response.status} ${response.statusText}`;
+                    consoleError(errorMsg);
                     cityData = [];
-                    resolve();
+                    reject(new Error(errorMsg));
                 }
-            });
+            },
+            onerror: function(error) {
+                consoleError('Error fetching city data with GM_xmlhttpRequest:', error);
+                cityData = [];
+                reject(error);
+            }
         });
-    }
+    });
+}
 
-    function setupTimezoneSearch() {
-        const searchInput = document.getElementById('otk-timezone-search-input');
-        const searchResultsDiv = document.getElementById('otk-timezone-search-results');
+function setupTimezoneSearch() {
+    const searchInput = document.getElementById('otk-timezone-search-input');
+    const searchResultsDiv = document.getElementById('otk-timezone-search-results');
 
-        function addZoneItem(city) {
-            const resultDiv = document.createElement('div');
-            // Display format: "City, State (Country)"
-            const displayText = `${city.city}, ${city.admin1} (${city.country_code})`;
-            resultDiv.textContent = displayText;
-            resultDiv.dataset.timezone = city.timezone;
-            resultDiv.style.cssText = `
-                padding: 4px;
-                cursor: pointer;
-                color: var(--otk-clock-search-text-color, #e6e6e6);
-            `;
-            resultDiv.addEventListener('mouseenter', () => {
-                resultDiv.style.backgroundColor = '#555';
-            });
-            resultDiv.addEventListener('mouseleave', () => {
-                resultDiv.style.backgroundColor = '';
-            });
-            resultDiv.addEventListener('click', () => {
-                const selectedTimezone = resultDiv.dataset.timezone;
-                let clocks = JSON.parse(localStorage.getItem('otkClocks') || '[]');
-                const clockIndex = clocks.findIndex(c => c.id === activeClockSearchId);
+    const addZoneItem = (city) => {
+        const resultDiv = document.createElement('div');
+        const displayText = `${city.city}, ${city.admin1} (${city.country_code})`;
+        resultDiv.textContent = displayText;
+        resultDiv.dataset.timezone = city.timezone;
+        resultDiv.dataset.city = city.city;
+        resultDiv.style.cssText = `
+            padding: 4px;
+            cursor: pointer;
+            color: var(--otk-clock-search-text-color, #e6e6e6);
+        `;
+        resultDiv.addEventListener('mouseenter', () => resultDiv.style.backgroundColor = '#555');
+        resultDiv.addEventListener('mouseleave', () => resultDiv.style.backgroundColor = '');
+        resultDiv.addEventListener('click', () => {
+            const selectedTimezone = resultDiv.dataset.timezone;
+            const selectedCity = resultDiv.dataset.city;
+            let clocks = JSON.parse(localStorage.getItem('otkClocks') || '[]');
+            const clockIndex = clocks.findIndex(c => c.id === activeClockSearchId);
 
-                if (clockIndex !== -1) {
-                    clocks[clockIndex].timezone = selectedTimezone;
-                    clocks[clockIndex].displayPlace = city.city;
-                    localStorage.setItem('otkClocks', JSON.stringify(clocks));
-                }
-
-                renderClocks(); // Re-render to show changes
-                renderClockOptions(); // Re-render the options list
-                document.getElementById('otk-timezone-search-container').style.display = 'none'; // Hide search
-                searchInput.value = '';
-                searchResultsDiv.innerHTML = '';
-                activeClockSearchId = null; // Reset active clock
-            });
-            searchResultsDiv.appendChild(resultDiv);
-        }
-
-        searchInput.addEventListener('input', () => {
-            const query = searchInput.value.trim().toLowerCase();
-            searchResultsDiv.innerHTML = '';
-
-            if (query.length < 2) {
-                return;
+            if (clockIndex !== -1) {
+                clocks[clockIndex].timezone = selectedTimezone;
+                clocks[clockIndex].displayPlace = selectedCity;
+                localStorage.setItem('otkClocks', JSON.stringify(clocks));
             }
 
-            const queryWords = query.split(/\s+/).filter(w => w.length > 0);
-
-            const results = cityData.filter(city => {
-                const fullCityName = `${city.city}, ${city.admin1}`.toLowerCase();
-                // Check if all query words are present in the city name
-                return queryWords.every(word => fullCityName.includes(word));
-            });
-
-            // Sort results by population (descending)
-            results.sort((a, b) => b.population - a.population);
-
-            // Display top results
-            results.slice(0, 50).forEach(city => {
-                addZoneItem(city);
-            });
+            renderClocks();
+            renderClockOptions();
+            document.getElementById('otk-timezone-search-container').style.display = 'none';
+            searchInput.value = '';
+            searchResultsDiv.innerHTML = '';
+            activeClockSearchId = null;
         });
-    }
+        searchResultsDiv.appendChild(resultDiv);
+    };
+
+    searchInput.addEventListener('input', () => {
+        const query = searchInput.value.trim().toLowerCase();
+        searchResultsDiv.innerHTML = '';
+
+        if (query.length < 2) return;
+
+        const queryWords = query.split(/\s+/).filter(w => w.length > 0);
+        const results = cityData.filter(city => {
+            const fullCityName = `${city.city}, ${city.admin1}`.toLowerCase();
+            return queryWords.every(word => fullCityName.includes(word));
+        }).sort((a, b) => b.population - a.population).slice(0, 50);
+
+        results.forEach(addZoneItem);
+    });
+}
 
 })();
