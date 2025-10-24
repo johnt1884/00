@@ -2004,17 +2004,29 @@ function createThreadListItemElement(thread, isForTooltip = false) {
     const dividerSymbol = themeSettings.otkThreadTimeDividerSymbol || '|';
     const dividerColor = themeSettings.otkThreadTimeDividerColor || '#ffffff';
 
-    if (timePosition === 'Before Title') titleTimeContainer.appendChild(timestampSpan);
-    if (dividerEnabled) {
-        const dividerSpan = document.createElement('span');
-        dividerSpan.textContent = dividerSymbol;
-        dividerSpan.style.color = dividerColor;
-        dividerSpan.style.fontSize = '10px';
-        dividerSpan.style.padding = '0 5px';
-        titleTimeContainer.appendChild(dividerSpan);
+    if (timePosition === 'Before Title') {
+        titleTimeContainer.appendChild(timestampSpan);
+        if (dividerEnabled) {
+            const dividerSpan = document.createElement('span');
+            dividerSpan.textContent = dividerSymbol;
+            dividerSpan.style.color = dividerColor;
+            dividerSpan.style.fontSize = '10px';
+            dividerSpan.style.padding = '0 5px';
+            titleTimeContainer.appendChild(dividerSpan);
+        }
+        titleTimeContainer.appendChild(titleLink);
+    } else { // After Title
+        titleTimeContainer.appendChild(titleLink);
+        if (dividerEnabled) {
+            const dividerSpan = document.createElement('span');
+            dividerSpan.textContent = dividerSymbol;
+            dividerSpan.style.color = dividerColor;
+            dividerSpan.style.fontSize = '10px';
+            dividerSpan.style.padding = '0 5px';
+            titleTimeContainer.appendChild(dividerSpan);
+        }
+        titleTimeContainer.appendChild(timestampSpan);
     }
-    titleTimeContainer.appendChild(titleLink);
-    if (timePosition === 'After Title') titleTimeContainer.appendChild(timestampSpan);
 
     const crayonIcon = document.createElement('span');
     crayonIcon.innerHTML = '🖍️';
@@ -2388,6 +2400,8 @@ function renderThreadList() {
         // Use a slight delay to ensure the loading screen renders before heavy processing
         await new Promise(resolve => setTimeout(resolve, 50));
 
+        messagesByThreadId = await loadMessagesFromDB();
+
         // Revoke old blob URLs before creating new ones
         for (const url of createdBlobUrls) {
             URL.revokeObjectURL(url);
@@ -2403,8 +2417,6 @@ function renderThreadList() {
         consoleLog("[renderMessagesInViewer] Cleared renderedMessageIdsInViewer, unique image hashes, top-level video tracking sets, and renderedFullSizeImageHashes for full rebuild.");
 
         otkViewer.innerHTML = ''; // Clear previous content
-
-        messagesByThreadId = await loadMessagesFromDB();
 
         let allMessages = getAllMessagesSorted();
 
@@ -4261,7 +4273,7 @@ function createMessageElementDOM(message, mediaLoadPromises, uniqueImageViewerHa
             let fetchedVideosInThread = 0;
             let newlyStoredImagesInThread = 0;
             let newlyStoredVideosInThread = 0;
-            
+
             const mediaDownloadQueue = [];
             const messagePromises = posts.map(async (post) => {
             fetchedMessagesInThread++;
@@ -5839,7 +5851,6 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
                 removeBtn.style.height = '25px';
                 removeBtn.style.boxSizing = 'border-box';
                 removeBtn.dataset.clockId = clock.id;
-                removeBtn.style.marginLeft = '5px';
                 removeBtn.addEventListener('click', () => {
                     let currentClocks = JSON.parse(localStorage.getItem('otkClocks') || '[]');
                     currentClocks = currentClocks.filter(c => c.id !== clock.id);
@@ -5887,7 +5898,6 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
 
         const addClockRow = document.createElement('div');
         addClockRow.classList.add('otk-option-row');
-        addClockRow.style.marginTop = '15px';
 
         const addClockControls = document.createElement('div');
         addClockControls.style.cssText = `
@@ -5917,6 +5927,49 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
         addClockControls.appendChild(addClockBtn);
         addClockRow.appendChild(addClockControls);
         clockListContainer.appendChild(addClockRow);
+
+    const defaultClockRow = document.createElement('div');
+    defaultClockRow.classList.add('otk-option-row');
+    defaultClockRow.style.paddingTop = '0';
+
+    const defaultClockControls = document.createElement('div');
+    defaultClockControls.style.cssText = `
+        display: flex;
+        grid-column: 1 / -1;
+    `;
+
+    const defaultClockBtn = createTrackerButton('Default Clock Options');
+    defaultClockBtn.style.padding = '2px 8px';
+    defaultClockBtn.style.fontSize = '11px';
+    defaultClockBtn.style.height = '25px';
+    defaultClockBtn.style.boxSizing = 'border-box';
+    defaultClockBtn.style.width = '100%';
+    defaultClockBtn.addEventListener('click', () => {
+        if (confirm("Are you sure you want to restore the default clock settings? This will reset all clocks and their positions.")) {
+            const defaultClocks = [
+                { "id": 1756699206552, "timezone": "America/Chicago", "displayPlace": "Austin" },
+                { "id": 1756699263949, "timezone": "America/Los_Angeles", "displayPlace": "Los Angeles" }
+            ];
+            const defaultClockPosition = { "top": "71px", "left": "1284px" };
+
+            localStorage.setItem('otkClocks', JSON.stringify(defaultClocks));
+            localStorage.setItem('otkClockPosition', JSON.stringify(defaultClockPosition));
+
+            renderClockOptions();
+            renderClocks();
+
+            const clockElement = document.getElementById('otk-clock');
+            if (clockElement) {
+                clockElement.style.top = defaultClockPosition.top;
+                clockElement.style.left = defaultClockPosition.left;
+                clockElement.style.right = 'auto';
+            }
+        }
+    });
+
+    defaultClockControls.appendChild(defaultClockBtn);
+    defaultClockRow.appendChild(defaultClockControls);
+    clockListContainer.appendChild(defaultClockRow);
     }
 
     function renderClocks() {
@@ -6884,6 +6937,13 @@ function applyThemeSettings(options = {}) {
         destroyPipResizer();
     }
 
+function createSectionHeading(text) {
+    const h = document.createElement('h5');
+    h.textContent = text;
+    // Adjusted margins for more space, removed border-bottom
+    h.style.cssText = "margin: 0; color: #cccccc; font-size: 13px; padding: 4px 10px 4px 30px; font-weight: bold; text-align: left; display: flex; align-items: center;";
+    return h;
+}
     function setupOptionsWindow() {
         let prePreviewSettings = null;
         let currentlyPreviewingThemeName = null;
@@ -7010,15 +7070,14 @@ function applyThemeSettings(options = {}) {
         const titleBarButtons = document.createElement('div');
         titleBarButtons.style.display = 'flex';
         titleBarButtons.style.alignItems = 'center';
+        titleBarButtons.style.gap = '8px';
 
         const applyButton = createTrackerButton('Apply', 'otk-apply-settings-btn');
         applyButton.style.display = 'none'; // Hidden by default
-        applyButton.style.marginRight = '10px';
         titleBarButtons.appendChild(applyButton);
 
         const discardButton = createTrackerButton('Discard', 'otk-discard-settings-btn');
-        discardButton.style.display = 'none'; // Hidden by default
-        discardButton.style.marginRight = '10px';
+        discardButton.style.display = 'none'; // Hidden by default;
         discardButton.style.backgroundColor = '#803333';
         discardButton.onmouseover = () => discardButton.style.backgroundColor = '#a04444';
         discardButton.onmouseout = () => discardButton.style.backgroundColor = '#803333';
@@ -7078,7 +7137,7 @@ function applyThemeSettings(options = {}) {
 
         const settingsManagementPanel = document.createElement('div');
         settingsManagementPanel.id = 'otk-settings-management-panel';
-        settingsManagementPanel.style.cssText = 'padding: 15px 0; display: none;';
+        settingsManagementPanel.style.cssText = 'padding: 5px 0; display: none;';
 
         contentArea.appendChild(mainOptionsPanel);
         contentArea.appendChild(threadTitleColorsPanel);
@@ -7626,9 +7685,15 @@ function applyThemeSettings(options = {}) {
         resetGeneralSettingsRow.appendChild(resetGeneralSettingsButton);
         generalSettingsSection.appendChild(resetGeneralSettingsRow);
 
+        // --- Spacer ---
+        const spacerAfterGeneral = document.createElement('div');
+        spacerAfterGeneral.style.height = '15px'; // Adjust this value for more or less space
+        generalSettingsSection.appendChild(spacerAfterGeneral);
+
+
         // --- Theme/Appearance Section ---
         // This section will now be added after the general settings.
-        // The 'sectionsContainer' might be redundant if themeSection is the only thing in it.
+        // The 'sectionsContainer' might be redundant if themeSection is the athing in it.
         // Let's append themeSection directly to contentArea as well, after generalSettingsSection.
         const sectionsContainer = document.createElement('div'); // Keep for potential future use if more sections are added here
         mainOptionsPanel.appendChild(sectionsContainer);
@@ -8005,14 +8070,6 @@ function applyThemeSettings(options = {}) {
             const hr = document.createElement('hr');
             hr.style.cssText = "width: 100%; border: none; border-top: 1px solid #555; margin: 12px 0 8px 0;";
             return hr;
-        }
-
-        function createSectionHeading(text) {
-            const h = document.createElement('h5');
-            h.textContent = text;
-            // Adjusted margins for more space, removed border-bottom
-            h.style.cssText = "margin: 0; color: #cccccc; font-size: 13px; padding: 4px 10px 4px 30px; font-weight: bold; text-align: left; display: flex; align-items: center;";
-            return h;
         }
 
         // Clear existing content from themeOptionsContainer before repopulating
@@ -8521,6 +8578,7 @@ function applyThemeSettings(options = {}) {
         resetAllColorsRow.classList.add('otk-option-row');
         resetAllColorsRow.style.gridTemplateColumns = '1fr';
         resetAllColorsRow.style.marginTop = '20px';
+        resetAllColorsRow.style.paddingTop = '15px'; // Add padding to the top of the row
 
         const resetAllColorsButton = createTrackerButton("Reset All Colors to Default");
         resetAllColorsButton.id = 'otk-reset-all-colors-btn';
@@ -9318,18 +9376,18 @@ function setupFilterWindow() {
     // --- Initial Actions / Main Execution ---
     function applyDefaultSettings() {
         const defaults = {
-            [OTK_TRACKED_KEYWORDS_KEY]: "otk, twitch, OTK & Company",
-            'otkSuspendAfterInactiveMinutes': '60',
-            'otkMediaLoadMode': "cache_only",
-            [BACKGROUND_UPDATES_DISABLED_KEY]: 'false',
-            'otkClockEnabled': 'true',
-            'otkPipModeEnabled': 'true',
-            [DEBUG_MODE_KEY]: 'false',
-            [THEME_SETTINGS_KEY]: JSON.stringify({
-                "guiBackgroundImageUrl": "https://image2url.com/images/1761275429757-19641f6e-dcaf-4e40-a54f-75fe346752db.jpeg",
+            "otkTrackedKeywords": "otk, twitch, OTK & Company",
+            "otkSuspendAfterInactiveMinutes": 60,
+            "otkMediaLoadMode": "cache_only",
+            "otkBackgroundUpdatesDisabled": false,
+            "otkClockEnabled": true,
+            "otkPipModeEnabled": true,
+            "otkDebugModeEnabled": false,
+            "otkThemeSettings": {
+                "guiBackgroundImageUrl": "(Local file used)",
                 "countdownLabelTextColor": "#ffffff",
                 "viewerBackgroundImageUrl": "",
-                "guiBgRepeat": "no-repeat",
+                "guiBgRepeat": "repeat",
                 "guiBgSize": "cover",
                 "viewerBgRepeat": "repeat-x",
                 "viewerBgSize": "contain",
@@ -9366,25 +9424,29 @@ function setupFilterWindow() {
                 "guiButtonActiveBgColor": "#ff8040",
                 "ownMsgBgColorOdd": "#fce573",
                 "ownMsgBgColorEven": "#fce573",
-                "otkThreadTitleAnimationDirection": "Down",
-                "guiBgPosition": "center"
-            }),
-            [THREAD_TITLE_COLORS_KEY]: JSON.stringify([
+                "otkThreadTitleAnimationDirection": "Down"
+            },
+            "otkThreadTitleColors": [
                 "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#46f0f0",
                 "#f032e6", "#bcf60c", "#008080", "#e6beff", "#912499", "#800000", "#aaffc3",
                 "#cbcb25", "#000075", "#ffffff"
-            ]),
-            [CLOCK_POSITION_KEY]: JSON.stringify({ "top": "71px", "left": "1284px" }),
-            [COUNTDOWN_POSITION_KEY]: JSON.stringify({ "top": "-5px", "left": "1522px" }),
-            'otkClocks': JSON.stringify([
+            ],
+            "otkClockPosition": { "top": "71px", "left": "1284px" },
+            "otkCountdownPosition": { "top": "-5px", "left": "1522px" },
+            "otkClocks": [
                 { "id": 1756699206552, "timezone": "America/Chicago", "displayPlace": "Austin" },
                 { "id": 1756699263949, "timezone": "America/Los_Angeles", "displayPlace": "Los Angeles" }
-            ])
+            ]
         };
 
         Object.keys(defaults).forEach(key => {
             if (localStorage.getItem(key) === null) {
-                localStorage.setItem(key, defaults[key]);
+                let valueToSet = defaults[key];
+                // The new defaults are already in the correct format, but we need to stringify objects.
+                if (typeof valueToSet === 'object') {
+                    valueToSet = JSON.stringify(valueToSet);
+                }
+                localStorage.setItem(key, valueToSet);
             }
         });
         console.log("Default settings applied if not already present.");
@@ -9789,117 +9851,269 @@ function setupFilterWindow() {
         startAutoEmbedReloader();
         startSuspensionChecker();
 
-        function renderSettingsManagementPanel() {
-            const panel = document.getElementById('otk-settings-management-panel');
-            if (!panel) return;
+        async function renderSettingsManagementPanel() {
+    const panel = document.getElementById('otk-settings-management-panel');
+    if (!panel) return;
 
-            panel.innerHTML = ''; // Clear existing content
+    panel.innerHTML = ''; // Clear existing content
 
-            const loadButtonRow = document.createElement('div');
-            loadButtonRow.classList.add('otk-option-row');
-            loadButtonRow.style.gridTemplateColumns = '1fr';
+    // --- Dynamic Profiles Section ---
+    const profilesContainer = document.createElement('div');
+    profilesContainer.id = 'otk-profiles-container';
+    // This container is for the list of saved profiles. It's added before the static buttons.
+    panel.appendChild(profilesContainer);
 
-            const loadButton = createTrackerButton('Load Settings From File');
-            loadButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
-            loadButton.addEventListener('click', () => {
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.accept = '.json';
-                input.onchange = (e) => {
-                    const file = e.target.files[0];
-                    if (!file) return;
+    try {
+        const profiles = await GM.getValue('otkSettingsProfiles', {});
+        const profileNames = Object.keys(profiles);
 
-                    const reader = new FileReader();
-                    reader.onload = (event) => {
-                        try {
-                            const settings = JSON.parse(event.target.result);
-                            Object.keys(settings).forEach(key => {
-                                const value = settings[key];
-                                localStorage.setItem(key, typeof value === 'object' ? JSON.stringify(value) : value);
-                            });
-                            alert('Settings loaded successfully. The page will now reload to apply all changes.');
-                            location.reload();
-                        } catch (err) {
-                            consoleError('Error parsing settings file:', err);
-                            alert('Error: Could not parse the settings file. Please ensure it is a valid JSON file.');
-                        }
-                    };
-                    reader.readAsText(file);
-                };
-                input.click();
-            });
+        if (profileNames.length > 0) {
+            profilesContainer.innerHTML = ''; // Clear any previous content
 
-            loadButtonRow.appendChild(loadButton);
-            panel.appendChild(loadButtonRow);
+            profileNames.forEach(profileName => {
+                // The rendering for each profile is also wrapped in a try-catch
+                try {
+                    const profileRow = document.createElement('div');
+                    profileRow.classList.add('otk-option-row');
+                    profileRow.style.display = 'flex';
+                    profileRow.style.alignItems = 'center';
+                    profileRow.style.gap = '10px';
 
-            const saveButtonRow = document.createElement('div');
-            saveButtonRow.classList.add('otk-option-row');
-            saveButtonRow.style.gridTemplateColumns = '1fr';
+                    const themeSettings = JSON.parse(profiles[profileName][THEME_SETTINGS_KEY] || '{}');
+                    const viewerBg = themeSettings.viewerBgColor || '#181818';
+                    const oddMsgBg = themeSettings.ownMsgBgColorOdd || '#d1e7ff';
+                    const evenMsgBg = themeSettings.ownMsgBgColorEven || '#c1d7ef';
 
-            const saveButton = createTrackerButton('Save Settings to File');
-            saveButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
-            saveButton.addEventListener('click', () => {
-                const filename = prompt("Enter a name for your settings file:", "otk-tracker-settings.json");
-                if (!filename) return;
+                    const colorBar = document.createElement('div');
+                    colorBar.style.cssText = `
+                        flex-grow: 1; height: 30px; border: 1px solid #555; border-radius: 3px;
+                        display: flex; align-items: center; justify-content: flex-start; position: relative;
+                        background: linear-gradient(90deg, ${viewerBg} 0%, ${evenMsgBg} 40%, ${oddMsgBg} 50%, ${evenMsgBg} 60%, ${viewerBg} 100%);
+                        padding-left: 10px;
+                    `;
 
-                const allSettings = {};
+                    const profileNameSpan = document.createElement('span');
+                    profileNameSpan.textContent = profileName;
+                    profileNameSpan.style.cssText = 'color: white; text-shadow: 0 0 2px black, 0 0 2px black, 0 0 2px black; font-weight: bold; cursor: pointer;';
 
-                // Merge pending changes into a temporary snapshot of theme settings
-                const currentThemeSettings = JSON.parse(localStorage.getItem(THEME_SETTINGS_KEY) || '{}');
-                const snapshotThemeSettings = { ...currentThemeSettings, ...pendingThemeChanges };
-                const keysToExport = [
-                    // General Settings
-                    OTK_TRACKED_KEYWORDS_KEY, OTK_BLOCKED_KEYWORDS_KEY, 'otkMinUpdateSeconds',
-                    'otkMaxUpdateSeconds', 'otkSuspendAfterInactiveMinutes', 'otkMediaLoadMode',
-                    BACKGROUND_UPDATES_DISABLED_KEY, 'otkAutoLoadUpdates', 'otkClockEnabled',
-                    'otkPipModeEnabled', DEBUG_MODE_KEY,
-                    // Theme & Appearance
-                    THEME_SETTINGS_KEY, THREAD_TITLE_COLORS_KEY, IMAGE_BLUR_AMOUNT_KEY,
-                    // Positional & State
-                    CLOCK_POSITION_KEY, COUNTDOWN_POSITION_KEY, 'otkClocks'
-                ];
+                    profileNameSpan.addEventListener('click', () => {
+                        const input = document.createElement('input');
+                        input.type = 'text';
+                        input.value = profileName;
+                        input.style.cssText = 'background: rgba(0,0,0,0.5); border: 1px solid white; color: white; font-weight: bold; text-shadow: 0 0 2px black; width: 150px;';
 
-                keysToExport.forEach(key => {
-                    let value = localStorage.getItem(key);
-                    if (value !== null) {
-                        try {
-                            let parsedValue = (key === THEME_SETTINGS_KEY) ? snapshotThemeSettings : JSON.parse(value);
-                            // Check within theme settings for data URLs
-                            if (key === THEME_SETTINGS_KEY && typeof parsedValue === 'object') {
-                                Object.keys(parsedValue).forEach(themeKey => {
-                                    if (typeof parsedValue[themeKey] === 'string' && parsedValue[themeKey].startsWith('data:image')) {
-                                        parsedValue[themeKey] = '(Local file used)';
-                                    }
-                                });
-                            }
-                            allSettings[key] = parsedValue;
-                        } catch (e) {
-                            // Value is not a JSON string, check if it's a data URL itself
-                            if (typeof value === 'string' && value.startsWith('data:image')) {
-                                allSettings[key] = '(Local file used)';
+                        colorBar.replaceChild(input, profileNameSpan);
+                        input.focus();
+                        input.select();
+
+                        const saveName = async () => {
+                            const newName = input.value.trim();
+                            if (newName && newName !== profileName) {
+                                let currentProfiles = await GM.getValue('otkSettingsProfiles', {});
+                                if (currentProfiles[newName]) {
+                                    alert('A profile with this name already exists.');
+                                    colorBar.replaceChild(profileNameSpan, input); // revert
+                                    return;
+                                }
+                                currentProfiles[newName] = currentProfiles[profileName];
+                                delete currentProfiles[profileName];
+                                await GM.setValue('otkSettingsProfiles', currentProfiles);
+                                renderSettingsManagementPanel(); // Re-render to update everything
                             } else {
-                                allSettings[key] = value;
+                                colorBar.replaceChild(profileNameSpan, input); // Revert if name is empty or unchanged
                             }
+                        };
+
+                        input.addEventListener('blur', saveName);
+                        input.addEventListener('keydown', (e) => {
+                            if (e.key === 'Enter') {
+                                saveName();
+                            } else if (e.key === 'Escape') {
+                                colorBar.replaceChild(profileNameSpan, input);
+                            }
+                        });
+                    });
+
+                    colorBar.appendChild(profileNameSpan);
+
+                    const buttonsWrapper = document.createElement('div');
+                    buttonsWrapper.style.cssText = 'display: flex; align-items: center; gap: 8px;';
+
+                    const loadProfileBtn = createTrackerButton('Load');
+                    loadProfileBtn.style.padding = '2px 8px';
+                    loadProfileBtn.addEventListener('click', () => {
+                        if (confirm(`Are you sure you want to load the "${profileName}" settings profile? This will overwrite your current settings.`)) {
+                            const profileSettings = profiles[profileName];
+                            Object.keys(profileSettings).forEach(key => localStorage.setItem(key, profileSettings[key]));
+                            alert('Settings loaded. The page will now reload.');
+                            location.reload();
                         }
-                    }
-                });
+                    });
 
-                const settingsString = JSON.stringify(allSettings, null, 2);
-                const blob = new Blob([settingsString], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
+                    const removeProfileBtn = createTrackerButton('Remove');
+                    removeProfileBtn.style.padding = '2px 8px';
+                    removeProfileBtn.addEventListener('click', async () => {
+                        if (confirm(`Are you sure you want to remove the "${profileName}" settings profile?`)) {
+                            let currentProfiles = await GM.getValue('otkSettingsProfiles', {});
+                            delete currentProfiles[profileName];
+                            await GM.setValue('otkSettingsProfiles', currentProfiles);
+                            renderSettingsManagementPanel();
+                        }
+                    });
 
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename.endsWith('.json') ? filename : `${filename}.json`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                    buttonsWrapper.appendChild(loadProfileBtn);
+                    buttonsWrapper.appendChild(removeProfileBtn);
+                    profileRow.appendChild(colorBar);
+                    profileRow.appendChild(buttonsWrapper);
+                    profilesContainer.appendChild(profileRow);
+                } catch (e) {
+                    consoleError(`Error rendering profile "${profileName}":`, e);
+                    const errorRow = document.createElement('div');
+                    errorRow.classList.add('otk-option-row');
+                    errorRow.style.color = 'red';
+                    errorRow.textContent = `Error rendering profile: ${profileName}`;
+                    profilesContainer.appendChild(errorRow);
+                }
             });
-
-            saveButtonRow.appendChild(saveButton);
-            panel.appendChild(saveButtonRow);
         }
+    } catch (e) {
+        consoleError("Error loading or rendering settings profiles:", e);
+        profilesContainer.innerHTML = '<div class="otk-option-row" style="color: red;">Could not load saved profiles.</div>';
+    }
+
+
+    // --- Static Buttons ---
+    // This section creates the buttons that should always be visible, after the profiles.
+
+    // 1. Save Settings to System Button
+    const saveToSystemButtonRow = document.createElement('div');
+    saveToSystemButtonRow.classList.add('otk-option-row');
+    saveToSystemButtonRow.style.gridTemplateColumns = '1fr';
+
+    const saveToSystemButton = createTrackerButton('Save Settings to System');
+    saveToSystemButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
+    saveToSystemButton.addEventListener('click', async () => {
+        const profileName = prompt("Enter a name for this settings profile:");
+        if (!profileName) return;
+
+        const allSettings = {};
+        const keysToExport = [
+            OTK_TRACKED_KEYWORDS_KEY, OTK_BLOCKED_KEYWORDS_KEY, 'otkMinUpdateSeconds',
+            'otkMaxUpdateSeconds', 'otkSuspendAfterInactiveMinutes', 'otkMediaLoadMode',
+            BACKGROUND_UPDATES_DISABLED_KEY, 'otkAutoLoadUpdates', 'otkClockEnabled',
+            'otkPipModeEnabled', DEBUG_MODE_KEY, THEME_SETTINGS_KEY, THREAD_TITLE_COLORS_KEY,
+            IMAGE_BLUR_AMOUNT_KEY, CLOCK_POSITION_KEY, COUNTDOWN_POSITION_KEY, 'otkClocks'
+        ];
+
+        keysToExport.forEach(key => {
+            let value = localStorage.getItem(key);
+            if (value !== null) allSettings[key] = value;
+        });
+
+        let profiles = await GM.getValue('otkSettingsProfiles', {});
+        profiles[profileName] = allSettings;
+        await GM.setValue('otkSettingsProfiles', profiles);
+
+        renderSettingsManagementPanel(); // Re-render the whole panel
+    });
+
+    saveToSystemButtonRow.appendChild(saveToSystemButton);
+    panel.appendChild(saveToSystemButtonRow);
+
+    // 2. Save Settings to File Button
+    const saveButtonRow = document.createElement('div');
+    saveButtonRow.classList.add('otk-option-row');
+    saveButtonRow.style.gridTemplateColumns = '1fr';
+
+    const saveButton = createTrackerButton('Save Settings to File');
+    saveButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
+    saveButton.addEventListener('click', () => {
+        const filename = prompt("Enter a name for your settings file:", "otk-tracker-settings.json");
+        if (!filename) return;
+
+        const allSettings = {};
+        const currentThemeSettings = JSON.parse(localStorage.getItem(THEME_SETTINGS_KEY) || '{}');
+        const snapshotThemeSettings = { ...currentThemeSettings, ...pendingThemeChanges };
+        const keysToExport = [
+            OTK_TRACKED_KEYWORDS_KEY, OTK_BLOCKED_KEYWORDS_KEY, 'otkMinUpdateSeconds',
+            'otkMaxUpdateSeconds', 'otkSuspendAfterInactiveMinutes', 'otkMediaLoadMode',
+            BACKGROUND_UPDATES_DISABLED_KEY, 'otkAutoLoadUpdates', 'otkClockEnabled',
+            'otkPipModeEnabled', DEBUG_MODE_KEY, THEME_SETTINGS_KEY, THREAD_TITLE_COLORS_KEY,
+            IMAGE_BLUR_AMOUNT_KEY, CLOCK_POSITION_KEY, COUNTDOWN_POSITION_KEY, 'otkClocks'
+        ];
+
+        keysToExport.forEach(key => {
+            let value = localStorage.getItem(key);
+            if (value !== null) {
+                try {
+                    let parsedValue = (key === THEME_SETTINGS_KEY) ? snapshotThemeSettings : JSON.parse(value);
+                    if (key === THEME_SETTINGS_KEY && typeof parsedValue === 'object') {
+                        Object.keys(parsedValue).forEach(themeKey => {
+                            if (typeof parsedValue[themeKey] === 'string' && parsedValue[themeKey].startsWith('data:image')) {
+                                parsedValue[themeKey] = '(Local file used)';
+                            }
+                        });
+                    }
+                    allSettings[key] = parsedValue;
+                } catch (e) {
+                    allSettings[key] = value;
+                }
+            }
+        });
+
+        const settingsString = JSON.stringify(allSettings, null, 2);
+        const blob = new Blob([settingsString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename.endsWith('.json') ? filename : `${filename}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    });
+
+    saveButtonRow.appendChild(saveButton);
+    panel.appendChild(saveButtonRow);
+
+    // 3. Load Settings From File Button
+    const loadButtonRow = document.createElement('div');
+    loadButtonRow.classList.add('otk-option-row');
+    loadButtonRow.style.gridTemplateColumns = '1fr';
+
+    const loadButton = createTrackerButton('Load Settings From File');
+    loadButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
+    loadButton.addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const settings = JSON.parse(event.target.result);
+                    Object.keys(settings).forEach(key => {
+                        const value = settings[key];
+                        localStorage.setItem(key, typeof value === 'object' ? JSON.stringify(value) : value);
+                    });
+                    alert('Settings loaded successfully. The page will now reload to apply all changes.');
+                    location.reload();
+                } catch (err) {
+                    consoleError('Error parsing settings file:', err);
+                    alert('Error: Could not parse the settings file. Please ensure it is a valid JSON file.');
+                }
+            };
+            reader.readAsText(file);
+        };
+        input.click();
+    });
+
+    loadButtonRow.appendChild(loadButton);
+    panel.appendChild(loadButtonRow);
+}
 
         // Kick off the script using the main async function
         main().finally(() => {
