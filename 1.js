@@ -2564,48 +2564,46 @@ consoleLog(`[StatsDebug] Unique image hashes for viewer: ${uniqueImageViewerHash
     consoleLog(`[StatsDebug] Viewer counts updated: Images=${viewerActiveImageCount}, Videos (top-level attached + top-level embed)=${viewerActiveVideoCount}`);
 updateDisplayedStatistics(false); // Update stats after all media processing is attempted.
 
-            let pinScrolled = false;
             const storedPinnedInstanceId = localStorage.getItem(PINNED_MESSAGE_ID_KEY);
-            consoleLog("storedPinnedInstanceId from localStorage:", storedPinnedInstanceId);
+            consoleLog("[ViewerScroll] Found pinned message ID in localStorage:", storedPinnedInstanceId);
 
             setTimeout(() => {
+                let scrolledToPin = false;
                 if (storedPinnedInstanceId) {
                     const pinnedElement = document.getElementById(storedPinnedInstanceId);
-                    consoleLog("pinnedElement from getElementById:", pinnedElement);
+                    consoleLog("[ViewerScroll] Attempting to find pinned element in DOM:", pinnedElement);
 
                     if (pinnedElement && messagesContainer.contains(pinnedElement)) {
                         try {
                             pinnedElement.scrollIntoView({ behavior: 'auto', block: 'center' });
-                            pinScrolled = true;
-                            consoleLog(`Scrolled to pinned message instance: ${storedPinnedInstanceId}`);
+                            scrolledToPin = true;
+                            consoleLog(`[ViewerScroll] Scrolled to pinned message instance: ${storedPinnedInstanceId}`);
                             if (!pinnedElement.classList.contains(PINNED_MESSAGE_CLASS)) {
                                 pinnedElement.classList.add(PINNED_MESSAGE_CLASS);
                             }
                         } catch (e) {
-                            consoleError("Error scrolling to pinned message:", e);
+                            consoleError("[ViewerScroll] Error scrolling to pinned message:", e);
                         }
                     } else {
-                        consoleWarn(`Pinned message instance ${storedPinnedInstanceId} not found. Clearing pin.`);
+                        consoleWarn(`[ViewerScroll] Pinned message instance ${storedPinnedInstanceId} not found in viewer. Clearing pin.`);
                         localStorage.removeItem(PINNED_MESSAGE_ID_KEY);
                     }
                 }
-            }, 500);
 
-            if (!pinScrolled) {
-                if (isToggleOpen && lastViewerScrollTop > 0) {
-                    messagesContainer.scrollTop = lastViewerScrollTop;
-                    consoleLog(`Restored scroll position to: ${lastViewerScrollTop}`);
-                } else if (!storedPinnedInstanceId) {
-                    setTimeout(() => {
+                if (!scrolledToPin) {
+                    if (isToggleOpen && lastViewerScrollTop > 0) {
+                        messagesContainer.scrollTop = lastViewerScrollTop;
+                        consoleLog(`[ViewerScroll] No pin found. Restored scroll position to: ${lastViewerScrollTop}`);
+                    } else {
                         messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                        consoleLog(`No pinned message, scrolling to bottom.`);
-                    }, 550);
+                        consoleLog(`[ViewerScroll] No pin or saved scroll position. Scrolling to bottom.`);
+                    }
                 }
-            }
 
-            updateLoadingProgress(100, "View ready!"); // Update text for 100%
-            setTimeout(hideLoadingScreen, 200);
-            applyThemeSettings({ forceRerender: false }); // Re-apply theme settings to ensure styles are correct after render
+                updateLoadingProgress(100, "View ready!");
+                setTimeout(hideLoadingScreen, 200);
+                applyThemeSettings({ forceRerender: false });
+            }, 500);
         }).catch(err => {
             consoleError("Error occurred during media loading promises:", err);
             updateLoadingProgress(100, "Error loading some media. View may be incomplete.");
@@ -2632,11 +2630,37 @@ updateDisplayedStatistics(false); // Update stats after all media processing is 
         const messageElementsBefore = messagesContainer.querySelectorAll('.otk-message-container-main');
         consoleLog(`[AppendLimit] Before append: DOM has ${messageElementsBefore.length} messages. renderedMessageIdsInViewer has ${renderedMessageIdsInViewer.size} IDs.`);
 
-        // Check if user is scrolled to the bottom before making changes.
-        // A small tolerance (e.g., 5px) can be useful.
+        // --- Scroll Anchoring Logic ---
+        let anchorInfo = null;
         const isScrolledToBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 5;
         consoleLog(`[ScrollRestore] User is at bottom: ${isScrolledToBottom}`);
 
+        if (!isScrolledToBottom) {
+            const messageElements = messagesContainer.querySelectorAll('.otk-message-container-main');
+            const messageLimitEnabled = (localStorage.getItem('otkMessageLimitEnabled') !== 'false');
+            const messageLimitValue = parseInt(localStorage.getItem('otkMessageLimitValue') || '500', 10);
+            const potentialPruneCount = Math.max(0, messageElements.length + newMessages.length - messageLimitValue);
+
+            for (let i = 0; i < messageElements.length; i++) {
+                const element = messageElements[i];
+                const rect = element.getBoundingClientRect();
+                const containerRect = messagesContainer.getBoundingClientRect();
+
+                // Check if the element is within the visible portion of the container
+                if (rect.top >= containerRect.top && rect.bottom <= containerRect.bottom) {
+                    if (i >= potentialPruneCount) {
+                        anchorInfo = {
+                            element: element,
+                            id: element.dataset.messageId,
+                            top: element.getBoundingClientRect().top
+                        };
+                        consoleLog(`[ScrollRestore] Found anchor message: ID=${anchorInfo.id}, Top=${anchorInfo.top}`);
+                        break; // Found our anchor
+                    }
+                }
+            }
+        }
+        // --- End Scroll Anchoring Logic ---
 
         const newContentDiv = document.createElement('div');
 
@@ -2712,12 +2736,13 @@ updateDisplayedStatistics(false); // Update stats after all media processing is 
         Promise.all(mediaLoadPromises).then(async () => {
             hideLoadingScreen();
 
-            if (isScrolledToBottom) {
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                consoleLog(`[ScrollRestore] Auto-scrolling to new bottom.`);
+            if (anchorInfo && anchorInfo.element) {
+                const newTop = anchorInfo.element.getBoundingClientRect().top;
+                const topDiff = newTop - anchorInfo.top;
+                messagesContainer.scrollTop += Math.round(topDiff); // Round to prevent minor jiggles
+                consoleLog(`[ScrollRestore] Restored scroll position based on anchor. Top diff: ${topDiff}, New scrollTop: ${messagesContainer.scrollTop}`);
             } else {
-                consoleLog(`[ScrollRestore] User was not at bottom. Maintaining scroll position.`);
-                // No action needed - browser will maintain scroll position relative to content.
+                consoleLog(`[ScrollRestore] User was not at bottom, but no anchor was found. Maintaining scroll position.`);
             }
 
             viewerActiveImageCount = uniqueImageViewerHashes.size;
@@ -4236,260 +4261,157 @@ function createMessageElementDOM(message, mediaLoadPromises, uniqueImageViewerHa
             let fetchedVideosInThread = 0;
             let newlyStoredImagesInThread = 0;
             let newlyStoredVideosInThread = 0;
+            
+            const mediaDownloadQueue = [];
+            const messagePromises = posts.map(async (post) => {
+            fetchedMessagesInThread++;
+            const message = {
+                id: post.no,
+                time: post.time,
+                originalThreadId: threadId,
+                text: '',
+                title: opPost.sub ? toTitleCase(decodeEntities(opPost.sub)) : `Thread ${threadId}`,
+                attachment: null,
+                com: post.com
+            };
 
-            for (const post of posts) {
-                fetchedMessagesInThread++;
-                const message = {
-                    id: post.no,
-                    time: post.time,
-                    originalThreadId: threadId, // Store the original thread ID for color lookup
-                    text: '', // Will be populated after decoding
-                    title: opPost.sub ? toTitleCase(decodeEntities(opPost.sub)) : `Thread ${threadId}`, // Assuming decodeEntities here handles what it needs for title
-                    attachment: null,
-                    com: post.com // Store the raw comment HTML for better quote parsing
+            if (post.com) {
+                let rawText = post.com.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+                message.text = decodeAllHtmlEntities(rawText);
+            }
+
+            if (post.filename && post.tim && post.ext) {
+                let filehash_db_key;
+                const postMd5 = post.md5 ? post.md5.trim() : null;
+
+                if (postMd5 && postMd5.length > 0 && postMd5 !== "                                        ") {
+                    filehash_db_key = postMd5;
+                } else {
+                    filehash_db_key = `${post.tim}${post.ext}`;
+                }
+
+                message.attachment = {
+                    filename: post.filename,
+                    ext: post.ext,
+                    tim: post.tim,
+                    w: post.w, h: post.h, fsize: post.fsize, md5: post.md5,
+                    filehash_db_key: filehash_db_key,
+                    localStoreId: null,
+                    tn_w: post.tn_w, tn_h: post.tn_h
                 };
 
-                if (post.com) {
-                    let rawText = post.com.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
-                    // Specific log for problematic strings if they occur
-                    if (rawText.includes('&#039;') || rawText.includes('&amp;#039;')) {
-                        consoleLog(`[Entity Debug] Original post.com for post ${post.no}:`, post.com);
-                        consoleLog(`[Entity Debug] Text after tag strip for post ${post.no}:`, rawText);
-                    }
-                    message.text = decodeAllHtmlEntities(rawText);
-                    if (rawText.includes('&#039;') || rawText.includes('&amp;#039;')) {
-                        consoleLog(`[Entity Debug] Text after decodeAllHtmlEntities for post ${post.no}:`, message.text);
-                    }
-                } else {
-                    message.text = '';
-                }
+                if (otkMediaDB) {
+                    const transaction = otkMediaDB.transaction(['mediaStore'], 'readonly');
+                    const store = transaction.objectStore('mediaStore');
+                    const dbRequest = store.get(filehash_db_key);
+                    const dbResult = await new Promise((resolve, reject) => {
+                        dbRequest.onsuccess = () => resolve(dbRequest.result);
+                        dbRequest.onerror = (e) => reject(e.target.error);
+                    });
 
-                if (post.filename && post.tim && post.ext) {
-                    let filehash_db_key;
-                    const postMd5 = post.md5 ? post.md5.trim() : null;
-
-                    if (postMd5 && postMd5.length > 0 && postMd5 !== "                                        ") { // Check for valid MD5
-                        filehash_db_key = postMd5;
+                    if (dbResult) {
+                        message.attachment.localStoreId = filehash_db_key;
                     } else {
-                        filehash_db_key = `${post.tim}${post.ext}`;
-                        consoleWarn(`MD5 hash not available or invalid for post ${post.no}, file ${post.filename}. Falling back to tim+ext for DB key: ${filehash_db_key}`);
-                    }
-
-                    message.attachment = {
-                        filename: post.filename,
-                        ext: post.ext,
-                        tn_w: post.tn_w,
-                        tn_h: post.tn_h,
-                        tim: post.tim, // Keep original tim for reference / thumbnail URL
-                        w: post.w,
-                        h: post.h,
-                        fsize: post.fsize,
-                        md5: post.md5, // Original MD5 from API
-                        filehash_db_key: filehash_db_key, // The key used for IndexedDB
-                        localStoreId: null, // Will be set to filehash_db_key if stored
-                        tn_w: post.tn_w,
-                        tn_h: post.tn_h
-                    };
-
-                    // Check if media is already in IndexedDB
-                    if (otkMediaDB) {
-                        try {
-                            const transaction = otkMediaDB.transaction(['mediaStore'], 'readonly');
-                            const store = transaction.objectStore('mediaStore');
-                            const dbRequest = store.get(filehash_db_key);
-
-                            const dbResult = await new Promise((resolve, reject) => {
-                                dbRequest.onsuccess = () => resolve(dbRequest.result);
-                                dbRequest.onerror = (dbEvent) => {
-                                    consoleError(`IndexedDB 'get' error for key ${filehash_db_key} (post ${post.no}):`, dbEvent.target.error);
-                                    reject(dbEvent.target.error);
-                                };
-                            });
-
-                            if (dbResult) {
-                                consoleLog(`Media with key ${filehash_db_key} (post ${post.no}) already in IndexedDB.`);
-                                message.attachment.localStoreId = filehash_db_key;
-                            } else {
-                                // Not in DB, try to download and store
-                                const mediaUrl = `https://i.4cdn.org/${opPost.board || 'b'}/${post.tim}${post.ext}`;
-                                consoleLog(`Downloading media for post ${post.no} (DB key: ${filehash_db_key}) from ${mediaUrl}`);
-                                try {
-                                    const mediaResponse = await new Promise((resolve, reject) => {
-                                        GM_xmlhttpRequest({
-                                            method: "GET",
-                                            url: mediaUrl,
-                                            responseType: 'blob',
-                                            onload: (response) => {
-                                                if (response.status === 200) {
-                                                    resolve(response.response);
-                                                } else {
-                                                    reject(new Error(`Failed to fetch media: ${response.status}`));
-                                                }
-                                            },
-                                            onerror: (error) => {
-                                                reject(error);
-                                            }
-                                        });
-                                    });
-
-                                    if (mediaResponse) {
-                                        const blob = mediaResponse;
-                                        const storeTransaction = otkMediaDB.transaction(['mediaStore'], 'readwrite');
-                                        const mediaStore = storeTransaction.objectStore('mediaStore');
-
-                                        // Stored object's key property must match the store's keyPath ('filehash')
-                                        const itemToStore = {
-                                            filehash: filehash_db_key, // This is the keyPath value
-                                            blob: blob,
-                                            originalThreadId: threadId,
-                                            filename: post.filename,
-                                            ext: post.ext, // Store ext for easier type identification for stats
-                                            timestamp: Date.now(),
-                                            isThumbnail: false // Mark that this is not a thumbnail
-                                        };
-
-                                        const putRequest = mediaStore.put(itemToStore);
-                                        await new Promise((resolvePut, rejectPut) => {
-                                            putRequest.onsuccess = () => {
-                                                message.attachment.localStoreId = filehash_db_key;
-                                                consoleLog(`Stored full media with key ${filehash_db_key} (post ${post.no}) in IndexedDB.`);
-
-                                                const extLower = post.ext.toLowerCase();
-                                                if (['.jpg', '.jpeg', '.png', '.gif'].includes(extLower)) {
-                                                    newlyStoredImagesInThread++;
-                                                    let currentImageCount = parseInt(localStorage.getItem(LOCAL_IMAGE_COUNT_KEY) || '0');
-                                                    localStorage.setItem(LOCAL_IMAGE_COUNT_KEY, (currentImageCount + 1).toString());
-                                                } else if (['.webm', '.mp4'].includes(extLower)) {
-                                                    newlyStoredVideosInThread++;
-                                                    let currentVideoCount = parseInt(localStorage.getItem(LOCAL_VIDEO_COUNT_KEY) || '0');
-                                                    localStorage.setItem(LOCAL_VIDEO_COUNT_KEY, (currentVideoCount + 1).toString());
-                                                }
-                                                updateDisplayedStatistics();
-                                                resolvePut();
-                                            };
-                                            putRequest.onerror = (putEvent) => {
-                                                consoleError(`IndexedDB 'put' error for full media key ${filehash_db_key} (post ${post.no}):`, putEvent.target.error);
-                                                rejectPut(putEvent.target.error);
-                                            };
-                                        });
-                                    } else {
-                                        consoleWarn(`Failed to download full media for post ${post.no} (DB key: ${filehash_db_key}). Status: ${mediaResponse.status}`);
-                                    }
-                                } catch (fetchError) {
-                                    consoleError(`Network error when fetching media for post ${post.no} (DB key: ${filehash_db_key}):`, fetchError);
-                                }
-                            }
-
-                            // --- Thumbnail Fetching and Storing (if image) ---
-                            const extLower = post.ext.toLowerCase();
-                            if (['.jpg', '.jpeg', '.png', '.gif'].includes(extLower)) { // Only try to fetch thumbs for image types
-                                const thumbnail_filehash_db_key = filehash_db_key + '_thumb';
-                                message.attachment.localThumbStoreId = null; // Initialize
-
-                                // Create a new transaction specifically for getting the thumbnail
-                                const thumbGetTransaction = otkMediaDB.transaction(['mediaStore'], 'readonly');
-                                const thumbGetStore = thumbGetTransaction.objectStore('mediaStore');
-                                const thumbDbRequest = thumbGetStore.get(thumbnail_filehash_db_key);
-
-                                const thumbDbResult = await new Promise((resolve, reject) => {
-                                    thumbDbRequest.onsuccess = () => resolve(thumbDbRequest.result);
-                                    // thumbGetTransaction will complete after this promise resolves or rejects
-                                    thumbGetTransaction.oncomplete = () => consoleLog(`Thumb get transaction completed for ${thumbnail_filehash_db_key}`);
-                                    thumbGetTransaction.onerror = (event) => consoleError(`Thumb get transaction error for ${thumbnail_filehash_db_key}:`, event.target.error);
-
-                                    thumbDbRequest.onerror = (dbEvent) => {
-                                        consoleError(`IndexedDB 'get' error for thumbnail key ${thumbnail_filehash_db_key} (post ${post.no}):`, dbEvent.target.error);
-                                        reject(dbEvent.target.error);
-                                    };
-                                });
-
-                                if (thumbDbResult) {
-                                    consoleLog(`Thumbnail with key ${thumbnail_filehash_db_key} (post ${post.no}) already in IndexedDB.`);
-                                    message.attachment.localThumbStoreId = thumbnail_filehash_db_key;
-                                } else {
-                                    const thumbUrl = `https://i.4cdn.org/${opPost.board || 'b'}/${post.tim}s.jpg`;
-                                    consoleLog(`Downloading thumbnail for post ${post.no} (DB key: ${thumbnail_filehash_db_key}) from ${thumbUrl}`);
-                                    try {
-                                        const thumbResponse = await new Promise((resolve, reject) => {
-                                            GM_xmlhttpRequest({
-                                                method: "GET",
-                                                url: thumbUrl,
-                                                responseType: 'blob',
-                                                onload: (response) => {
-                                                    if (response.status === 200) {
-                                                        resolve(response.response);
-                                                    } else {
-                                                        reject(new Error(`Failed to fetch thumbnail: ${response.status}`));
-                                                    }
-                                                },
-                                                onerror: (error) => {
-                                                    reject(error);
-                                                }
-                                            });
-                                        });
-                                        if (thumbResponse) {
-                                            const thumbBlob = thumbResponse;
-                                            const thumbStoreTransaction = otkMediaDB.transaction(['mediaStore'], 'readwrite'); // New transaction
-                                            const thumbMediaStore = thumbStoreTransaction.objectStore('mediaStore');
-                                            const thumbItemToStore = {
-                                                filehash: thumbnail_filehash_db_key,
-                                                blob: thumbBlob,
-                                                originalThreadId: threadId,
-                                                filename: `${post.filename}_thumb.jpg`, // Adjust filename
-                                                ext: '.jpg', // Thumbnails are typically jpg
-                                                timestamp: Date.now(),
-                                                isThumbnail: true // Mark that this IS a thumbnail
-                                            };
-                                            const thumbPutRequest = thumbMediaStore.put(thumbItemToStore);
-                                            await new Promise((resolvePut, rejectPut) => {
-                                                thumbPutRequest.onsuccess = () => {
-                                                    message.attachment.localThumbStoreId = thumbnail_filehash_db_key;
-                                                    consoleLog(`Stored thumbnail with key ${thumbnail_filehash_db_key} (post ${post.no}) in IndexedDB.`);
-                                                    // Do NOT increment LOCAL_IMAGE_COUNT_KEY or newlyStoredImagesInThread for thumbnails here
-                                                    // to avoid double counting if the main image is also counted.
-                                                    resolvePut();
-                                                };
-                                                thumbPutRequest.onerror = (putEvent) => {
-                                                    consoleError(`IndexedDB 'put' error for thumbnail key ${thumbnail_filehash_db_key} (post ${post.no}):`, putEvent.target.error);
-                                                    rejectPut(putEvent.target.error);
-                                                };
-                                            });
-                                        } else {
-                                            consoleWarn(`Failed to download thumbnail for post ${post.no} (DB key: ${thumbnail_filehash_db_key}). Status: ${thumbResponse.status}`);
-                                        }
-                                    } catch (thumbFetchError) {
-                                        consoleError(`Error fetching thumbnail for post ${post.no} (DB key: ${thumbnail_filehash_db_key}):`, thumbFetchError);
-                                    }
-                                }
-                            }
-                            // --- End Thumbnail Fetching ---
-
-                        } catch (dbError) {
-                            consoleError(`General IndexedDB error for post ${post.no} (DB key: ${filehash_db_key}):`, dbError);
-                        }
-                    } else {
-                        consoleWarn('otkMediaDB not available for media operations (post ${post.no}).');
+                        mediaDownloadQueue.push({ post, message, filehash_db_key, board: opPost.board || 'b' });
                     }
                 }
-                // If attachment was not stored (e.g., already in DB or download failed), but is an image/video, still count as fetched.
-                // This logic is slightly complex because the primary counting for fetchedImages/Videos happens inside the IDB storage path.
-                // A simpler way for fetched media is to count them when `message.attachment` is first processed.
-                if (post.filename && post.ext) { // This block is outside the IDB check, runs if attachment exists
-                    const ext = post.ext.toLowerCase();
-                    if (['.jpg', '.jpeg', '.png', '.gif'].includes(ext)) {
-                        // If not already counted by the IDB storage success path (e.g. it was already in DB or failed download)
-                        // This can lead to double counting if not careful.
-                        // Let's refine: `fetchedImagesInThread` should be incremented once when an image attachment is identified.
-                        // The current location increments it only on successful *new* store.
-                        // This will be handled by moving the increment outside the successful store block or before it.
-                        // For now, the current logic for `newlyStoredImagesInThread` is correct.
-                        // `fetchedImagesInThread` needs to be incremented unconditionally if `post.ext` is an image type.
-                    } else if (['.webm', '.mp4'].includes(ext)) {
-                        // Similar for videos.
-                    }
-                }
-                processedMessages.push(message);
             }
+            return message;
+        });
+
+        const initialProcessedMessages = await Promise.all(messagePromises);
+        processedMessages.push(...initialProcessedMessages);
+
+        // Process media download queue sequentially
+        for (const item of mediaDownloadQueue) {
+            const { post, message, filehash_db_key, board } = item;
+            const mediaUrl = `https://i.4cdn.org/${board}/${post.tim}${post.ext}`;
+            try {
+                const mediaResponse = await new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({
+                        method: "GET", url: mediaUrl, responseType: 'blob',
+                        onload: (response) => {
+                            if (response.status === 200) resolve(response.response);
+                            else reject(new Error(`Fetch failed: ${response.status}`));
+                        },
+                        onerror: (error) => reject(error)
+                    });
+                });
+
+                if (mediaResponse) {
+                    const blob = mediaResponse;
+                    const storeTransaction = otkMediaDB.transaction(['mediaStore'], 'readwrite');
+                    const mediaStore = storeTransaction.objectStore('mediaStore');
+                    const itemToStore = {
+                        filehash: filehash_db_key, blob: blob, originalThreadId: threadId,
+                        filename: post.filename, ext: post.ext, timestamp: Date.now(), isThumbnail: false
+                    };
+                    const putRequest = mediaStore.put(itemToStore);
+                    await new Promise((resolve, reject) => {
+                        putRequest.onsuccess = () => {
+                            message.attachment.localStoreId = filehash_db_key;
+                            const extLower = post.ext.toLowerCase();
+                            if (['.jpg', '.jpeg', '.png', '.gif'].includes(extLower)) newlyStoredImagesInThread++;
+                            else if (['.webm', '.mp4'].includes(extLower)) newlyStoredVideosInThread++;
+                            updateDisplayedStatistics();
+                            resolve();
+                        };
+                        putRequest.onerror = (e) => reject(e.target.error);
+                    });
+                }
+            } catch (fetchError) {
+                consoleError(`Error fetching media for post ${post.no}:`, fetchError);
+            }
+
+            const extLower = post.ext.toLowerCase();
+            if (['.jpg', '.jpeg', '.png', '.gif'].includes(extLower)) {
+                const thumbnail_filehash_db_key = filehash_db_key + '_thumb';
+                const thumbGetTransaction = otkMediaDB.transaction(['mediaStore'], 'readonly');
+                const thumbGetStore = thumbGetTransaction.objectStore('mediaStore');
+                const thumbDbRequest = thumbGetStore.get(thumbnail_filehash_db_key);
+                const thumbDbResult = await new Promise((resolve, reject) => {
+                    thumbDbRequest.onsuccess = () => resolve(thumbDbRequest.result);
+                    thumbDbRequest.onerror = (e) => reject(e.target.error);
+                });
+
+                if (thumbDbResult) {
+                    message.attachment.localThumbStoreId = thumbnail_filehash_db_key;
+                } else {
+                    const thumbUrl = `https://i.4cdn.org/${board}/${post.tim}s.jpg`;
+                    try {
+                        const thumbResponse = await new Promise((resolve, reject) => {
+                            GM_xmlhttpRequest({
+                                method: "GET", url: thumbUrl, responseType: 'blob',
+                                onload: (response) => {
+                                    if (response.status === 200) resolve(response.response);
+                                    else reject(new Error(`Fetch failed: ${response.status}`));
+                                },
+                                onerror: (error) => reject(error)
+                            });
+                        });
+                        if (thumbResponse) {
+                            const thumbBlob = thumbResponse;
+                            const thumbStoreTransaction = otkMediaDB.transaction(['mediaStore'], 'readwrite');
+                            const thumbMediaStore = thumbStoreTransaction.objectStore('mediaStore');
+                            const thumbItemToStore = {
+                                filehash: thumbnail_filehash_db_key, blob: thumbBlob, originalThreadId: threadId,
+                                filename: `${post.filename}_thumb.jpg`, ext: '.jpg', timestamp: Date.now(), isThumbnail: true
+                            };
+                            const thumbPutRequest = thumbMediaStore.put(thumbItemToStore);
+                            await new Promise((resolve, reject) => {
+                                thumbPutRequest.onsuccess = () => {
+                                    message.attachment.localThumbStoreId = thumbnail_filehash_db_key;
+                                    resolve();
+                                };
+                                thumbPutRequest.onerror = (e) => reject(e.target.error);
+                            });
+                        }
+                    } catch (thumbFetchError) {
+                        consoleError(`Error fetching thumbnail for post ${post.no}:`, thumbFetchError);
+                    }
+                }
+            }
+        }
 
             // Refined counting for fetched media (regardless of storage status)
             // This ensures fetchedImagesInThread and fetchedVideosInThread are accurate even if media was already in DB.
@@ -4579,66 +4501,53 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
 
             consoleLog(`[BG] Active threads after catalog sync: ${activeThreads.length}`, activeThreads);
 
-            const fetchPromisesBg = activeThreads.map(threadId => {
-                return fetchThreadMessages(threadId)
-                    .then(result => ({ threadId, messages: result, status: 'fulfilled' }))
-                    .catch(error => ({ threadId, error, status: 'rejected' }));
-            });
-
-            const resultsBg = await Promise.all(fetchPromisesBg);
-            if (isManualRefreshInProgress) { consoleLog('[BG] Aborting due to manual refresh starting during message fetch.'); return; }
-
             let newMessages = [];
-            resultsBg.forEach(result => {
-                // consoleLog('[DebugRefreshV2][BG] backgroundRefresh - Raw Promise.allSettled result:', JSON.stringify(result)); // Removed
-                if (result.status === 'fulfilled' && result) {
-                    // consoleLog('[DebugRefreshV2][BG] backgroundRefresh - Fulfilled promise value:', JSON.stringify(result.value)); // Removed
-                    const { threadId, messages: newMessagesResult, status: fetchStatus } = result;
-                    // consoleLog('[DebugRefreshV2][BG] backgroundRefresh - Destructured - threadId:', threadId, 'fetchStatus (from wrapper):', fetchStatus, 'newMessages type:', typeof newMessages, 'is Array?:', Array.isArray(newMessages), 'length (if array):', Array.isArray(newMessages) ? newMessages.length : 'N/A'); // Removed
+            // Process threads sequentially to avoid rate-limiting from 4chan API
+            for (const threadId of activeThreads) {
+                if (isManualRefreshInProgress) {
+                    consoleLog('[BG] Aborting due to manual refresh starting during message fetch loop.');
+                    return;
+                }
 
-                    if (fetchStatus === 'rejected') {
-                        consoleError(`[BG] Error fetching thread ${threadId}:`, result.error);
-                        return;
+                try {
+                    const newMessagesResult = await fetchThreadMessages(threadId);
+
+                    if (newMessagesResult && typeof newMessagesResult === 'object' && newMessagesResult.status === 'not_modified') {
+                        consoleLog(`[BG] Thread ${threadId} was not modified. Skipping.`);
+                        continue; // Skip to the next thread
                     }
 
-                    // consoleLog(`[BG] Processing fetched messages for thread ${threadId}. Result:`, newMessages); // Original log
-                    // consoleLog('[DebugRefreshV2][BG] backgroundRefresh - About to process newMessages for thread:', threadId, 'Value:', JSON.stringify(newMessages)); // Removed
-
-                    // Handle 'not_modified' status from fetchThreadMessages
-                    if (newMessagesResult && typeof newMessagesResult === 'object' && newMessagesResult.status === 'not_modified' && newMessagesResult.threadId === threadId) {
-                        consoleLog(`[BG] Thread ${threadId} was not modified. Skipping message update for this thread.`);
-                    } else if (newMessagesResult && Array.isArray(newMessagesResult.messages) && newMessagesResult.messages.length > 0) { // Regular message array
-                        // consoleLog(`[DebugRefreshV2][BG] backgroundRefresh - Processing ${newMessages.length} messages for thread ${threadId}.`); // Removed
-                        consoleLog(`[BG] Processing ${newMessagesResult.messages.length} messages for thread ${threadId}.`); // Standard log
+                    if (newMessagesResult && Array.isArray(newMessagesResult.messages) && newMessagesResult.messages.length > 0) {
+                        consoleLog(`[BG] Processing ${newMessagesResult.messages.length} messages for thread ${threadId}.`);
                         let existing = messagesByThreadId[threadId] || [];
                         let existingIds = new Set(existing.map(m => m.id));
                         let updatedMessages = [...existing];
                         let newMessagesInThread = [];
+
                         newMessagesResult.messages.forEach(m => {
                             if (!existingIds.has(m.id)) {
                                 updatedMessages.push(m);
                                 newMessagesInThread.push(m);
                             }
                         });
-                        newMessages.push(...newMessagesInThread);
-                        updatedMessages.sort((a, b) => a.time - b.time);
-                        messagesByThreadId[threadId] = updatedMessages;
-                        if (messagesByThreadId[threadId].length > 0 && (!messagesByThreadId[threadId][0].title || messagesByThreadId[threadId][0].title === `Thread ${threadId}`)) {
-                            messagesByThreadId[threadId][0].title = newMessagesResult.messages[0].title;
+
+                        if (newMessagesInThread.length > 0) {
+                            newMessages.push(...newMessagesInThread);
+                            updatedMessages.sort((a, b) => a.time - b.time);
+                            messagesByThreadId[threadId] = updatedMessages;
+
+                            // Ensure OP title is present if it was missing
+                            if (messagesByThreadId[threadId].length > 0 && (!messagesByThreadId[threadId][0].title || messagesByThreadId[threadId][0].title === `Thread ${threadId}`)) {
+                                messagesByThreadId[threadId][0].title = newMessagesResult.messages[0].title;
+                            }
                         }
                     } else if (newMessagesResult && newMessagesResult.messages.length === 0) {
                         consoleLog(`[BG] No new messages returned or thread is empty for active thread ${threadId}.`);
-                        // Note: Thread pruning logic based on catalog scan is primary.
-                        // If fetchThreadMessages returns empty for a 404, it might have been removed from activeThreads already by catalog logic.
-                        // If it's still active here, it means the catalog saw it, but it's empty or was just pruned.
-                        // We don't remove it from activeThreads here solely based on empty messages if catalog still lists it.
-                        // The original logic to remove from activeThreads if no messages returned was a bit aggressive here.
-                        // The catalog scan is the authority for active threads.
                     }
-                } else if (result.status === 'rejected') {
-                    consoleError(`[BG] Promise rejected for a thread fetch operation:`, result.reason);
+                } catch (error) {
+                    consoleError(`[BG] Error fetching or processing thread ${threadId} in sequence:`, error);
                 }
-            });
+            }
 
             consoleLog(`[BG] Final active threads after message processing: ${activeThreads.length}`, activeThreads);
             consoleLog('[BG] Saving data...');
@@ -4669,15 +4578,20 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
 
             updateDisplayedStatistics(isBackground);
 
-            if (viewerIsOpen && !skipViewerUpdate) {
+            if (viewerIsOpen && !skipViewerUpdate && newMessages.length > 0) {
                 const autoLoad = localStorage.getItem('otkAutoLoadUpdates') === 'true';
-                if (autoLoad && newMessages.length > 0) {
+                if (autoLoad && !document.hidden) {
                     appendNewMessagesToViewer(newMessages);
-                } else if (newMessages.length > 0) {
+                } else {
+                    // Cache if autoLoad is off OR tab is hidden
                     const cachedIds = new Set(cachedNewMessages.map(m => m.id));
                     const messagesToCache = newMessages.filter(m => !cachedIds.has(m.id));
                     cachedNewMessages.push(...messagesToCache);
-                    consoleLog(`[BG] Viewer is open, caching ${messagesToCache.length} new messages for manual refresh.`);
+                    if (autoLoad && document.hidden) {
+                        consoleLog(`[BG] Tab is hidden, caching ${messagesToCache.length} new messages.`);
+                    } else {
+                        consoleLog(`[BG] Caching ${messagesToCache.length} new messages for manual refresh.`);
+                    }
                 }
             }
 
@@ -4749,6 +4663,7 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
 
     async function refreshThreadsAndMessages(options = {}) { // Manual Refresh / Called by Clear
         loadUserPostIds();
+        messagesByThreadId = await loadMessagesFromDB(); // Ensure in-memory is synced with DB
         const { skipViewerUpdate = false, isChildCall = false } = options; // Destructure with default
 
         if (!isChildCall) {
@@ -4978,16 +4893,26 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
 
         if (!skipViewerUpdate && viewerIsOpen) {
             let allNewMessages = [...cachedNewMessages, ...newMessagesToAppend];
+            allNewMessages.sort((a, b) => a.time - b.time);
             cachedNewMessages = [];
             consoleLog('[Manual Refresh] Cleared background message cache.');
+
+            const themeSettings = JSON.parse(localStorage.getItem(THEME_SETTINGS_KEY)) || {};
+            const messageLimitEnabled = themeSettings.otkMessageLimitEnabled !== false;
+            const messageLimitValue = parseInt(themeSettings.otkMessageLimitValue || '500', 10);
+
+            if (messageLimitEnabled && allNewMessages.length > messageLimitValue) {
+                consoleLog(`[Manual Refresh] Applying message limit: Culling ${allNewMessages.length - messageLimitValue} oldest messages before rendering.`);
+                allNewMessages = allNewMessages.slice(-messageLimitValue);
+            }
+
             const allNewIds = new Set();
             const uniqueNewMessages = allNewMessages.filter(m => {
-                if (allNewIds.has(m.id)) {
-                    return false;
-                }
+                if (allNewIds.has(m.id)) return false;
                 allNewIds.add(m.id);
                 return true;
             });
+
             const finalMessagesToAppend = uniqueNewMessages.filter(m => !renderedMessageIdsInViewer.has(m.id));
             consoleLog(`[Manual Refresh] Viewer is open, appending ${finalMessagesToAppend.length} new messages.`);
             await appendNewMessagesToViewer(finalMessagesToAppend);
@@ -5254,11 +5179,18 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
             });
         }
 
-        const newMessages = unreadIds.size;
+        let newMessages = unreadIds.size;
         const newImages = 0;
         const newVideos = 0;
 
         const viewerIsOpen = otkViewer && otkViewer.style.display === 'block';
+        const autoLoad = localStorage.getItem('otkAutoLoadUpdates') === 'true';
+
+        // If viewer is open and autoloading, don't show the (+n) stat
+        // because messages are appended in real-time.
+        if (viewerIsOpen && autoLoad) {
+            newMessages = 0;
+        }
 
         const mainMessagesCount = viewerIsOpen ? renderedMessageIdsInViewer.size : totalMessagesInStorage;
         const mainImagesCount = viewerIsOpen ? uniqueImageViewerHashes.size : totalImagesInStorage;
@@ -6152,7 +6084,12 @@ async function backgroundRefreshThreadsAndMessages(options = {}) { // Added opti
         defaultColorsBtn.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
         defaultColorsBtn.addEventListener('click', () => {
             if (confirm("Are you sure you want to revert to the default thread title colours?")) {
-                localStorage.removeItem(THREAD_TITLE_COLORS_KEY);
+                const defaultColors = [
+                    "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#46f0f0",
+                    "#f032e6", "#bcf60c", "#008080", "#e6beff", "#912499", "#800000", "#aaffc3",
+                    "#cbcb25", "#000075", "#ffffff"
+                ];
+                localStorage.setItem(THREAD_TITLE_COLORS_KEY, JSON.stringify(defaultColors));
                 renderThreadTitleColorsOptions();
             }
         });
@@ -7008,45 +6945,63 @@ function applyThemeSettings(options = {}) {
         clockOptionsText.textContent = 'Clock Options';
         clockOptionsText.style.cursor = 'pointer';
 
+        const settingsManagementTab = document.createElement('span');
+        settingsManagementTab.id = 'otk-options-tab-settings-management';
+        settingsManagementTab.textContent = 'Settings Management';
+        settingsManagementTab.style.cursor = 'pointer';
+
         const divider1 = document.createElement('span');
         divider1.innerHTML = '&nbsp;|&nbsp;';
         const divider2 = document.createElement('span');
         divider2.innerHTML = '&nbsp;|&nbsp;';
+        const divider3 = document.createElement('span');
+        divider3.innerHTML = '&nbsp;|&nbsp;';
 
         titleContainer.appendChild(optionsTab);
         titleContainer.appendChild(divider1);
         titleContainer.appendChild(threadTitleColorsTab);
         titleContainer.appendChild(divider2);
         titleContainer.appendChild(clockOptionsText);
+        titleContainer.appendChild(divider3);
+        titleContainer.appendChild(settingsManagementTab);
         titleBar.appendChild(titleContainer);
 
-        optionsTab.addEventListener('click', () => {
-            document.getElementById('otk-main-options-panel').style.display = 'block';
+        const hideAllPanels = () => {
+            document.getElementById('otk-main-options-panel').style.display = 'none';
             document.getElementById('otk-thread-title-colors-panel').style.display = 'none';
             document.getElementById('otk-clock-options-panel').style.display = 'none';
-            optionsTab.style.textDecoration = 'underline';
+            document.getElementById('otk-settings-management-panel').style.display = 'none';
+            optionsTab.style.textDecoration = 'none';
             threadTitleColorsTab.style.textDecoration = 'none';
             clockOptionsText.style.textDecoration = 'none';
+            settingsManagementTab.style.textDecoration = 'none';
+        };
+
+        optionsTab.addEventListener('click', () => {
+            hideAllPanels();
+            document.getElementById('otk-main-options-panel').style.display = 'block';
+            optionsTab.style.textDecoration = 'underline';
         });
 
         threadTitleColorsTab.addEventListener('click', () => {
-            document.getElementById('otk-main-options-panel').style.display = 'none';
+            hideAllPanels();
             document.getElementById('otk-thread-title-colors-panel').style.display = 'block';
-            document.getElementById('otk-clock-options-panel').style.display = 'none';
-            optionsTab.style.textDecoration = 'none';
             threadTitleColorsTab.style.textDecoration = 'underline';
-            clockOptionsText.style.textDecoration = 'none';
             renderThreadTitleColorsOptions();
         });
 
         clockOptionsText.addEventListener('click', () => {
-            document.getElementById('otk-main-options-panel').style.display = 'none';
-            document.getElementById('otk-thread-title-colors-panel').style.display = 'none';
+            hideAllPanels();
             document.getElementById('otk-clock-options-panel').style.display = 'block';
-            optionsTab.style.textDecoration = 'none';
-            threadTitleColorsTab.style.textDecoration = 'none';
             clockOptionsText.style.textDecoration = 'underline';
             renderClockOptions();
+        });
+
+        settingsManagementTab.addEventListener('click', () => {
+            hideAllPanels();
+            document.getElementById('otk-settings-management-panel').style.display = 'block';
+            settingsManagementTab.style.textDecoration = 'underline';
+            renderSettingsManagementPanel();
         });
 
         // Set initial state
@@ -7121,9 +7076,14 @@ function applyThemeSettings(options = {}) {
         clockOptionsPanel.id = 'otk-clock-options-panel';
         clockOptionsPanel.style.cssText = 'padding: 15px 0; display: none;';
 
+        const settingsManagementPanel = document.createElement('div');
+        settingsManagementPanel.id = 'otk-settings-management-panel';
+        settingsManagementPanel.style.cssText = 'padding: 15px 0; display: none;';
+
         contentArea.appendChild(mainOptionsPanel);
         contentArea.appendChild(threadTitleColorsPanel);
         contentArea.appendChild(clockOptionsPanel);
+        contentArea.appendChild(settingsManagementPanel);
 
         renderClockOptions();
 
@@ -7142,7 +7102,6 @@ function applyThemeSettings(options = {}) {
 
         const generalSettingsHeading = createSectionHeading('General Settings');
         generalSettingsHeading.style.position = 'relative'; // For icon positioning
-        generalSettingsHeading.style.marginTop = "10px";
         generalSettingsHeading.style.marginBottom = "6px";
         // Vertically center the text content
         generalSettingsHeading.style.display = 'flex';
@@ -8307,9 +8266,6 @@ function applyThemeSettings(options = {}) {
             select.value = (JSON.parse(localStorage.getItem(THEME_SETTINGS_KEY)) || {})[options.storageKey] || options.defaultValue;
             select.addEventListener('change', () => {
                 saveThemeSetting(options.storageKey, select.value, options.requiresRerender || false);
-                 if (!options.requiresRerender) {
-                    applyThemeSettings({ forceRerender: false });
-                }
             });
             controlsWrapperDiv.appendChild(select);
             group.appendChild(label);
@@ -9360,7 +9316,82 @@ function setupFilterWindow() {
 
 
     // --- Initial Actions / Main Execution ---
+    function applyDefaultSettings() {
+        const defaults = {
+            [OTK_TRACKED_KEYWORDS_KEY]: "otk, twitch, OTK & Company",
+            'otkSuspendAfterInactiveMinutes': '60',
+            'otkMediaLoadMode': "cache_only",
+            [BACKGROUND_UPDATES_DISABLED_KEY]: 'false',
+            'otkClockEnabled': 'true',
+            'otkPipModeEnabled': 'true',
+            [DEBUG_MODE_KEY]: 'false',
+            [THEME_SETTINGS_KEY]: JSON.stringify({
+                "guiBackgroundImageUrl": "https://image2url.com/images/1761275429757-19641f6e-dcaf-4e40-a54f-75fe346752db.jpeg",
+                "countdownLabelTextColor": "#ffffff",
+                "viewerBackgroundImageUrl": "",
+                "guiBgRepeat": "no-repeat",
+                "guiBgSize": "cover",
+                "viewerBgRepeat": "repeat-x",
+                "viewerBgSize": "contain",
+                "clockCogIconColor": "#ff8040",
+                "clockCogColor": "#FFD700",
+                "cogIconColor": "#FFD700",
+                "guiThreadListTimeColor": "#ffffff",
+                "msgDepth0TextColor": null,
+                "msgDepth0HeaderTextColor": null,
+                "viewerHeaderBorderColor": null,
+                "otkThreadTimePosition": "Before Title",
+                "otkThreadTimeDividerEnabled": true,
+                "otkThreadTimeDividerSymbol": "|",
+                "separatorColor": "#ff0505",
+                "otkThreadTimeDividerColor": "#ff8040",
+                "otkMaxUpdateSeconds": "4",
+                "otkThreadTimeBracketStyle": "none",
+                "otkNewMessagesSeparatorAlignment": "Left",
+                "blockedContentFontColor": "#a60c0c",
+                "msgDepth1BgColor": null,
+                "msgDepth2plusBgColor": null,
+                "guiThreadBoxOutlineColor": "#919191",
+                "viewerMessageOutlineColor": "#ff8040",
+                "viewerThreadBoxOutlineColor": "#919191",
+                "plusIconBgColor": "#ffffff",
+                "otkThreadTitleAnimationSpeed": "1.5",
+                "qrBgColor": "#ffd1a4",
+                "qrBorderColor": "#ff8000",
+                "qrTextareaBgColor": "#ffffff",
+                "qrTextareaTextColor": "#000000",
+                "pinHighlightBgColor": "#ff8040",
+                "qrHeaderBgColor": "#000000",
+                "loadingProgressBarFillColor": "#ff8000",
+                "guiButtonActiveBgColor": "#ff8040",
+                "ownMsgBgColorOdd": "#fce573",
+                "ownMsgBgColorEven": "#fce573",
+                "otkThreadTitleAnimationDirection": "Down",
+                "guiBgPosition": "center"
+            }),
+            [THREAD_TITLE_COLORS_KEY]: JSON.stringify([
+                "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4", "#46f0f0",
+                "#f032e6", "#bcf60c", "#008080", "#e6beff", "#912499", "#800000", "#aaffc3",
+                "#cbcb25", "#000075", "#ffffff"
+            ]),
+            [CLOCK_POSITION_KEY]: JSON.stringify({ "top": "71px", "left": "1284px" }),
+            [COUNTDOWN_POSITION_KEY]: JSON.stringify({ "top": "-5px", "left": "1522px" }),
+            'otkClocks': JSON.stringify([
+                { "id": 1756699206552, "timezone": "America/Chicago", "displayPlace": "Austin" },
+                { "id": 1756699263949, "timezone": "America/Los_Angeles", "displayPlace": "Los Angeles" }
+            ])
+        };
+
+        Object.keys(defaults).forEach(key => {
+            if (localStorage.getItem(key) === null) {
+                localStorage.setItem(key, defaults[key]);
+            }
+        });
+        console.log("Default settings applied if not already present.");
+    }
+
     async function main() {
+        applyDefaultSettings();
         // Ensure default animation speed is set on first run
         let settings = JSON.parse(localStorage.getItem(THEME_SETTINGS_KEY)) || {};
         if (settings.otkThreadTitleAnimationSpeed === undefined) {
@@ -9758,6 +9789,118 @@ function setupFilterWindow() {
         startAutoEmbedReloader();
         startSuspensionChecker();
 
+        function renderSettingsManagementPanel() {
+            const panel = document.getElementById('otk-settings-management-panel');
+            if (!panel) return;
+
+            panel.innerHTML = ''; // Clear existing content
+
+            const loadButtonRow = document.createElement('div');
+            loadButtonRow.classList.add('otk-option-row');
+            loadButtonRow.style.gridTemplateColumns = '1fr';
+
+            const loadButton = createTrackerButton('Load Settings From File');
+            loadButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
+            loadButton.addEventListener('click', () => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.json';
+                input.onchange = (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        try {
+                            const settings = JSON.parse(event.target.result);
+                            Object.keys(settings).forEach(key => {
+                                const value = settings[key];
+                                localStorage.setItem(key, typeof value === 'object' ? JSON.stringify(value) : value);
+                            });
+                            alert('Settings loaded successfully. The page will now reload to apply all changes.');
+                            location.reload();
+                        } catch (err) {
+                            consoleError('Error parsing settings file:', err);
+                            alert('Error: Could not parse the settings file. Please ensure it is a valid JSON file.');
+                        }
+                    };
+                    reader.readAsText(file);
+                };
+                input.click();
+            });
+
+            loadButtonRow.appendChild(loadButton);
+            panel.appendChild(loadButtonRow);
+
+            const saveButtonRow = document.createElement('div');
+            saveButtonRow.classList.add('otk-option-row');
+            saveButtonRow.style.gridTemplateColumns = '1fr';
+
+            const saveButton = createTrackerButton('Save Settings to File');
+            saveButton.style.cssText += "padding: 2px 8px; font-size: 11px; height: 25px; box-sizing: border-box; width: 100%;";
+            saveButton.addEventListener('click', () => {
+                const filename = prompt("Enter a name for your settings file:", "otk-tracker-settings.json");
+                if (!filename) return;
+
+                const allSettings = {};
+
+                // Merge pending changes into a temporary snapshot of theme settings
+                const currentThemeSettings = JSON.parse(localStorage.getItem(THEME_SETTINGS_KEY) || '{}');
+                const snapshotThemeSettings = { ...currentThemeSettings, ...pendingThemeChanges };
+                const keysToExport = [
+                    // General Settings
+                    OTK_TRACKED_KEYWORDS_KEY, OTK_BLOCKED_KEYWORDS_KEY, 'otkMinUpdateSeconds',
+                    'otkMaxUpdateSeconds', 'otkSuspendAfterInactiveMinutes', 'otkMediaLoadMode',
+                    BACKGROUND_UPDATES_DISABLED_KEY, 'otkAutoLoadUpdates', 'otkClockEnabled',
+                    'otkPipModeEnabled', DEBUG_MODE_KEY,
+                    // Theme & Appearance
+                    THEME_SETTINGS_KEY, THREAD_TITLE_COLORS_KEY, IMAGE_BLUR_AMOUNT_KEY,
+                    // Positional & State
+                    CLOCK_POSITION_KEY, COUNTDOWN_POSITION_KEY, 'otkClocks'
+                ];
+
+                keysToExport.forEach(key => {
+                    let value = localStorage.getItem(key);
+                    if (value !== null) {
+                        try {
+                            let parsedValue = (key === THEME_SETTINGS_KEY) ? snapshotThemeSettings : JSON.parse(value);
+                            // Check within theme settings for data URLs
+                            if (key === THEME_SETTINGS_KEY && typeof parsedValue === 'object') {
+                                Object.keys(parsedValue).forEach(themeKey => {
+                                    if (typeof parsedValue[themeKey] === 'string' && parsedValue[themeKey].startsWith('data:image')) {
+                                        parsedValue[themeKey] = '(Local file used)';
+                                    }
+                                });
+                            }
+                            allSettings[key] = parsedValue;
+                        } catch (e) {
+                            // Value is not a JSON string, check if it's a data URL itself
+                            if (typeof value === 'string' && value.startsWith('data:image')) {
+                                allSettings[key] = '(Local file used)';
+                            } else {
+                                allSettings[key] = value;
+                            }
+                        }
+                    }
+                });
+
+                const settingsString = JSON.stringify(allSettings, null, 2);
+                const blob = new Blob([settingsString], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename.endsWith('.json') ? filename : `${filename}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+
+            saveButtonRow.appendChild(saveButton);
+            panel.appendChild(saveButtonRow);
+        }
+
         // Kick off the script using the main async function
         main().finally(() => {
             // Final verification log after main execution sequence
@@ -9766,6 +9909,18 @@ function setupFilterWindow() {
                 consoleLog('[Final Check] Computed flex-grow for centerInfoContainer:', window.getComputedStyle(centerInfo).flexGrow);
             } else {
                 consoleWarn('[Final Check] centerInfoContainer not found for flex-grow check.');
+            }
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            const viewerIsOpen = otkViewer && otkViewer.style.display === 'block';
+            if (!document.hidden && viewerIsOpen && cachedNewMessages.length > 0) {
+                const autoLoad = localStorage.getItem('otkAutoLoadUpdates') === 'true';
+                if (autoLoad) {
+                    consoleLog(`[Visibility] Tab is visible, appending ${cachedNewMessages.length} cached messages.`);
+                    appendNewMessagesToViewer(cachedNewMessages);
+                    cachedNewMessages = []; // Clear cache after appending
+                }
             }
         });
 
